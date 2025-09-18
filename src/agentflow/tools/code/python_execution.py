@@ -17,7 +17,7 @@ class PythonExecutionTool(BaseTool):
     def __init__(self,
                  *,
                  timeout_length: int = 5,
-                 mem_limit_mb: int = 256,
+                 mem_limit_mb: int = 512,
                  allowed_imports: Optional[List[str]] = None,
                  truncate_len: int = 600,
                  config: Optional[Dict[str, Any]] = None,

@@ -54,7 +54,7 @@ class PythonExecutor:
         self._helpers.update(helpers)
 
     def run(self, plan: ExecPlan) -> ExecutionResult:
-        with ProcessPool(max_workers=1) as pool:
+        with ProcessPool(max_workers=1,max_tasks=1) as pool:
             fn = partial(_run_in_sandbox,
                          code=plan.code,
                          capture_mode=plan.capture_mode,
@@ -69,33 +69,62 @@ class PythonExecutor:
                 return future.result()
             except PebbleTimeoutError:
                 return ExecutionResult(ok=False, result="", stdout="", error="Timeout", duration_s=self.config.time_limit_s)
+            except Exception as e:
+                return ExecutionResult(ok=False, result="", stdout="", error=f"{type(e).__name__}", duration_s=self.config.time_limit_s)
 
     def run_many(self, plans: List[ExecPlan], show_progress: bool=False) -> List[ExecutionResult]:
         if not plans:
             return []
+        outs: List[ExecutionResult] = [None] * len(plans)
         with ProcessPool(max_workers=min(self.max_workers, len(plans))) as pool:
-            fn = partial(_run_in_sandbox,
+            fn_base = partial(_run_in_sandbox,
                          config=self.config,
                          headers=self._headers+self._helper_code,
                          context=self._context,
                          helpers=self._helpers)
-            future = [
-                pool.schedule(partial(fn,
-                                      code=p.code,
-                                      capture_mode=p.capture_mode,
-                                      answer_symbol=p.answer_symbol,
-                                      answer_expr=p.answer_expr),
-                              timeout=self.config.time_limit_s)
-                for p in plans
-            ]
-            out: List[ExecutionResult] = []
-            pbar = tqdm(total=len(plans), desc="Execute") if (show_progress and len(plans)>50) else None
-            for f in future:
+            futures: List[Tuple[int, Any]] = []
+            for idx, p in enumerate(plans):
                 try:
-                    out.append(f.result())
+                    fn = partial(
+                        fn_base,
+                        code=p.code,
+                        capture_mode=p.capture_mode,
+                        answer_symbol=p.answer_symbol,
+                        answer_expr=p.answer_expr
+                    )
+                    fut = pool.schedule(fn, timeout=self.config.time_limit_s)
+                    futures.append((idx, fut))
+                except Exception as e:
+                    outs[idx] = ExecutionResult(
+                        ok=False, result="", stdout="",
+                        error=f"ScheduleFailed: {type(e).__name__}: {e}",
+                        duration_s=None
+                    )
+
+            use_pbar = show_progress and len(plans) > 50
+            pbar = tqdm(total=len(plans), desc="Execute") if use_pbar else None
+
+            for idx, fut in futures:
+                try:
+                    r = fut.result()
                 except PebbleTimeoutError:
-                    out.append(ExecutionResult(ok=False, result="", stdout="", error="Timeout",
-                                               duration_s=self.config.time_limit_s))
+                    r = ExecutionResult(
+                        ok=False, result="", stdout="",
+                        error="Timeout",
+                        duration_s=self.config.time_limit_s
+                    )
+                except Exception as e:
+                    r = ExecutionResult(
+                        ok=False, result="", stdout="",
+                        error=f"Exception: {type(e).__name__}: {e}",
+                        duration_s=None
+                    )
+                outs[idx] = r
                 if pbar: pbar.update(1)
             if pbar: pbar.close()
-        return out
+
+        return [
+            x if x is not None else ExecutionResult(ok=False, result="", stdout="", error="UnknownError", duration_s=None)
+            for x in outs
+        ]
+
