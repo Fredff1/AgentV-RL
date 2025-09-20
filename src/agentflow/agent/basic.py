@@ -70,7 +70,10 @@ class ToolDrivenAgent(CanGenerate):
             
             batch_inputs = [trans_messages_to_standard(contexts[i].all_messages()) for i in active]
             batch_extra = [contexts[i].meta for i in active]
-            texts, backend_metas = self.backend.generate(batch_inputs, extra=batch_extra, **kwargs)
+            try:
+                texts, backend_metas = self.backend.generate(batch_inputs, extra=batch_extra, **kwargs)
+            except:
+                break
             
             for j, i in enumerate(active):
                 contexts[i].step_index = round

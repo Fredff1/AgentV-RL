@@ -130,6 +130,8 @@ def build_sequences_for_block(
     for samp in samples:
         resp = to_text(samp)
         seq = join_template.format(problem=prompt_text, solution=resp)
+        if len(seq) > 20000:
+            seq = seq[(len(seq)-20000):]
         seqs.append(seq)
     return seqs
 

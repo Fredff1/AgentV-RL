@@ -125,6 +125,8 @@ def build_sequences_for_block(
     for samp in samples:
         resp = to_text(samp)
         seq = join_template.format(problem=prompt_text, solution=resp)
+        if len(seq) > 20000:
+            seq = seq[(len(seq)-20000):]
         seqs.append(seq)
     return seqs
 
@@ -259,6 +261,7 @@ import sympy
         tool_caller=caller,
         finish_fn=_finish_gen,
         error_fn=_error_gen,
+        max_rounds=5,
     )
 
     # 2) 读取 judge 模板；若未提供则用 BoolLogitsGenerativeScorer 默认
@@ -293,6 +296,7 @@ import sympy
         seqs = build_sequences_for_block(block, join_template=join_template)
         batch_blocks.append(block)
         batch_sequences_per_block.append(seqs)
+        
 
         if len(batch_blocks) >= record_batch_size:
             write_mode = flush_batch_and_write(

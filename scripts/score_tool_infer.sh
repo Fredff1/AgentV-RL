@@ -1,9 +1,9 @@
-export CUDA_VISIBLE_DEVICES=5,7
+export CUDA_VISIBLE_DEVICES=4
 
 python /root/workspace/agent-rm/Agent-Verifier/src/score_tool_agent.py \
-  --config /root/workspace/agent-rm/Agent-Verifier/config/score_vanilla.yaml \
-  --input  /root/workspace/agent-rm/datasets/aime2025/bon/qwen3_4b_aime2025-bon128.jsonl \
-  --output /root/workspace/agent-rm/datasets/aime2025/0918/qwen3_4b_aime2025-bon128_tool_score2_by_qwen2.5-7b.jsonl \
+  --config /root/workspace/agent-rm/Agent-Verifier/config/score_tool.yaml \
+  --input  /root/workspace/agent-rm/datasets/math500/bon/qwen2.5-7b-math-bon128-math500.jsonl \
+  --output /root/workspace/agent-rm/datasets/math500/0919/qwen2.5-7b-math-bon128-math500_tool_score1_by_qwen2.5-7b.jsonl \
   --record-batch-size 1 \
   --include_full_meta \
   # --judge-system-file /root/workspace/agent-rm/prompts/judge_system.txt \

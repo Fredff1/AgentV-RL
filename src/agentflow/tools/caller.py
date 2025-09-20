@@ -18,7 +18,7 @@ class ToolCaller:
 
         Args:
             texts (List[str]): Texts that contains tool-call symbols
-            metas (List[Dict], optional): Meta info that contains. Defaults to None.
+            metas (List[Dict], optional): Meta info of the given texts. Defaults to None.
 
         If any meta contains a dict with structure {"tool_name":int}, tool quota will be applied to the corresponding tool.
         Raises:
