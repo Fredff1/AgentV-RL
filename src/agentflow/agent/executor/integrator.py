@@ -56,7 +56,7 @@ def build_rollout_for_model(
     sequence: str,
     plan: Plan,
     report: ExecutionReport,
-    include_tool_traces: bool = False,
+    include_tool_traces: bool = True,
     max_tool_chars: int = 1000
 ) -> str:
     ridx: Dict[str, VerificationSubtaskReport] = {
@@ -67,8 +67,8 @@ def build_rollout_for_model(
     lines: List[str] = []
     lines.append(f'<rollout sequence_id="{_esc(report.sequence_id)}">')
     lines.append(f"  <sequence>{_esc(sequence)}</sequence>")
-    # lines.append(f"  <problem>{_esc(plan.problem_brief)}</problem>")
-    # lines.append(f"  <asked>{_esc(plan.asked_quantity)}</asked>")
+    lines.append(f"  <problem>{_esc(plan.problem_brief)}</problem>")
+    lines.append(f"  <asked>{_esc(plan.asked_quantity)}</asked>")
 
     if plan.assumptions_required:
         lines.append("  <assumptions>")
@@ -92,7 +92,6 @@ def build_rollout_for_model(
             lines.append(f"      <rationale>{_esc(st.rationale)}</rationale>")
         lines.append(f"      <inputs>{_esc(st_inputs)}</inputs>")
         lines.append(f"      <expected>{_esc(st_expected)}</expected>")
-        lines.append(f"      <tool_hint>{_esc(st_tool_hint)}</tool_hint>")
 
         rr = ridx.get(st.id)
         if rr is None:
@@ -113,14 +112,15 @@ def build_rollout_for_model(
             if include_tool_traces and getattr(rr, "tool_traces", None):
                 lines.append("      <tools>")
                 for tc in rr.tool_traces:
-                    # 最小健壮序列化
                     name = getattr(tc, "tool_name", None) or getattr(tc, "name", None) or "tool"
+                    tool_call_content = _soft_trunc(tc.call.content,2000)
                     raw = _json_compact(getattr(tc, "output", None) or getattr(tc, "result", None) or "")
                     raw = _soft_trunc(raw, max_tool_chars)
-                    lines.append(f'        <tool name="{_esc(name)}">{_esc(raw)}</tool>')
+                    lines.append(f'        <tool name="{_esc(name)}"><call>{tool_call_content}</call>{_esc(raw)}</tool>')
                 lines.append("      </tools>")
 
-        raw = getattr(rr, "raw_trace", "") if rr is not None else ""
+        # raw = getattr(rr, "raw_trace", "") if rr is not None else ""
+        raw = None
         if raw:
             lines.append(f"      <raw_trace>{_esc(_soft_trunc(str(raw), 2000))}</raw_trace>")
 
@@ -132,14 +132,7 @@ def build_rollout_for_model(
     uncertain = sum(1 for r in report.subtask_reports if isinstance(r, VerificationSubtaskReport) and r.verdict is None)
     lines.append('  <summary>')
     lines.append(f'    <counts passed="{passed}" failed="{failed}" uncertain="{uncertain}"/>')
-    if report.meta:
-        lines.append(f"    <exec_meta>{_esc(_json_compact(report.meta))}</exec_meta>")
     lines.append("  </summary>")
-
-    lines.append('  <instruction>')
-    lines.append('    Decide the final judgement strictly as one token: "true" or "false".')
-    lines.append('    Reply with exactly one XML tag: <answer>true</answer> or <answer>false</answer>.')
-    lines.append('  </instruction>')
     lines.append("</rollout>")
     return "\n".join(lines)
 
@@ -162,10 +155,6 @@ def integrate_and_predict(
     scorer: BoolLogitsGenerativeScorer,
     include_tool_traces: bool = False
 ) -> List[FinalPrediction]:
-    """将 plan+report 整合为单条文本；若存在任何 fail，直接 verdict=False, score=0.0；
-    否则（无 fail）若提供 scorer，则用 choice_probs 给出 P(true)，不提供则 score=None。
-    注意：本函数不调用生成式 judge，只输出分数与短路后的结论。
-    """
     predictions: List[FinalPrediction] = [None] * len(sequences)
     rollouts_for_generation = []
     rollout_for_generation_idx: List[int] = []

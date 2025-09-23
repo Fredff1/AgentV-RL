@@ -36,8 +36,8 @@ DATA_PATH = ""
 
 def main():
     config = load_config("/root/workspace/agent-rm/Agent-Verifier/config/score_tool.yaml")
-    # backend = OpenaiBackend(config)
-    backend = VllmChoiceLogitsBackend(config)
+    backend = OpenaiBackend(config)
+    # backend = VllmChoiceLogitsBackend(config)
 
     planner = LLMPlanner(backend)
     # data = JsonUtil.read_jsonlines(DATA_PATH)

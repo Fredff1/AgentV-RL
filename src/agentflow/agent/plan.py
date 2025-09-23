@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Any, Optional, Callable, Sequence
+import traceback
+
 
 from .context import AgentContext
 from agentflow.core.interfaces import CanGenerate, CanChoiceProbs, CanRMScores
@@ -15,6 +17,7 @@ from agentflow.agent.planner.llm_planner import LLMPlanner
 from agentflow.agent.executor.executor import VerificationSubtaskExecutor, simple_aggregate_verdict
 from agentflow.agent.executor.integrator import integrate_and_predict
 from agentflow.utils.chat_template import is_chat_messages   
+from agentflow.utils.log_util import get_logger
 
 
 SYSTEM_PROMPT = """
@@ -96,7 +99,8 @@ class PlanSubtaskAgent(CanRMScores):
                 metas[idx]["final_result"]=result
                 metas[idx]["judge"]=result.verdict
             return scores, metas
-        except:
+        except Exception as e:
             scores = [-1] * len(sequences)
             metas = [{"raw_text":"","judge":None} for _ in range(len(sequences))] 
+            traceback.print_exc()
             return scores, metas

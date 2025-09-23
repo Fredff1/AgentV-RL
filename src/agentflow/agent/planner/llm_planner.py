@@ -26,7 +26,6 @@ class JsonPlanParser:
         if not isinstance(obj["subtasks"], list):
             obj["subtasks"] = []
 
-        # 轻量校正 subtasks
         fixed = []
         for i, st in enumerate(obj["subtasks"], 1):
             if not isinstance(st, dict):

@@ -24,7 +24,7 @@ SCHEMA (JSON):
 {{
   "problem_brief": "one-sentence restatement of the problem",
   "asked_quantity": "exact object to decide/compute (incl. domain/range/modulus/form)",
-  "assumptions_required": ["minimal necessary assumptions to make reasoning valid"],
+  "assumptions_required": ["necessary assumptions to make reasoning valid"],
   "subtasks": [
     {{
       "id": "s1",

@@ -19,11 +19,12 @@ from .prompts import _DEFAULT_SYSTEM, _USER_TPL
 
 @dataclass
 class ExecutorConfig:
-    max_rounds_per_subtask: int = 6
-    default_tool_max_calls: int = 3
+    max_rounds_per_subtask: int = 4
+    default_tool_max_calls: int = 2
     system_prompt: str = _DEFAULT_SYSTEM
     helper_code_snippets: List[str] = field(default_factory=list)
     helper_modules: List[str] = field(default_factory=list)
+
 
 
 class VerificationSubtaskExecutor(SubtaskExecutor):
@@ -49,6 +50,17 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
             error_fn=lambda ctx: self._has_error(ctx),
             max_rounds=self.config.max_rounds_per_subtask,
         )
+        
+    def _make_skipped_report(self, st: Subtask, reason: str = "early_stop_on_fail") -> VerificationSubtaskReport:
+        return VerificationSubtaskReport(
+            subtask_id=st.id,
+            raw_trace="<skipped/>",
+            tool_traces=[],
+            rounds_used=0,
+            notes={"skipped": True, "reason": reason},
+            verdict=None,              # 占位：None
+            verify_text="",
+        )
 
     @staticmethod
     def _has_final(ctx: AgentContext) -> bool:
@@ -58,10 +70,8 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
         answer_tags = find_tags(last.content, ["answer"])
         if not answer_tags:
             return False
-        target_tag = answer_tags[-1]
-        if VerificationSubtaskExecutor._to_bool(target_tag.body):
+        else:
             return True
-        return False
     
     @staticmethod
     def _to_bool(text: str) -> Optional[bool]:
@@ -90,6 +100,8 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
     def _execute_all(self, *, sequences: List[str], plans: List[Plan]) -> List[ExecutionReport]:
         subtasks_per_plan: List[List[Subtask]] = []
         subtask_reports_per_plan: List[List[VerificationSubtaskReport]] = [[] for _ in plans]
+        stopped: List[bool] = [False] * len(plans)
+        max_subtasks = max((len(sts) for sts in subtasks_per_plan), default=0)
         for seq, plan in zip(sequences,plans):
             subtasks_per_plan.append(plan.subtasks)
         sub_task_idx = 0
@@ -101,16 +113,23 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
         while sub_task_idx < max_subtasks:
             input_msgs = []
             input_msg_indicies: List[int] = []
+            
             for idx, (seq, plan, subtasks) in enumerate(zip(sequences,plans, subtasks_per_plan)):
+                if stopped[idx]:
+                    continue
+                
                 if sub_task_idx < len(subtasks):
                     input_msgs.append(self._format_subtask_prompt(seq,plan,subtasks[sub_task_idx]))
                     input_msg_indicies.append(idx)
             try:
                 answers, metas = self.agent.generate(input_msgs)
-            except:
+            except Exception as e:
+                print(e)
+                sub_task_idx += 1
+                process_bar.update(1)
                 continue
-            for idx, (indice, answer, meta) in enumerate(zip(input_msg_indicies,answers,metas)):
-                curr_plan = subtasks_per_plan[indice]
+            for idx, (plan_idx, answer, meta) in enumerate(zip(input_msg_indicies,answers,metas)):
+                curr_plan = subtasks_per_plan[plan_idx]
                 curr_subtask = curr_plan[sub_task_idx]
                 curr_agent_context: AgentContext = meta["context"]
                 
@@ -119,6 +138,7 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
                     verdict = None
                 else:
                     verdict = VerificationSubtaskExecutor._to_bool(answer_tags[-1].body)
+                    
                 verify_tags = find_tags(answer, ["verify"])
                 if not verify_tags:
                     verify_text = ""
@@ -133,9 +153,20 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
                     verdict=verdict,
                     verify_text=verify_text,
                 )
-                subtask_reports_per_plan[indice].append(report)
+                subtask_reports_per_plan[plan_idx].append(report)
+                
+                if verdict is False:
+                    stopped[plan_idx] = True
             sub_task_idx+=1
             process_bar.update(1)
+            
+        for plan_idx, (plan, reports) in enumerate(zip(plans, subtask_reports_per_plan)):
+            num_have = len(reports)
+            num_need = len(plan.subtasks)
+            if num_have < num_need:
+                # 从 num_have 开始的剩余 subtask 全部补占位
+                for st in plan.subtasks[num_have:]:
+                    reports.append(self._make_skipped_report(st, reason="early_stop_on_fail"))
             
         final_reports = []
         for idx, sub_reports in enumerate(subtask_reports_per_plan):
@@ -148,13 +179,26 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
     
 
     def _tool_budget(self, st: Subtask) -> int:
-        return int(st.tool_hint.get("max_calls",
+        try:
+            return int(st.tool_hint.get("max_calls",
                    self.config.default_tool_max_calls))
+        except:
+            return self.config.default_tool_max_calls
 
     def _python_allowed(self, st: Subtask) -> bool:
-        return bool(st.tool_hint.get("python", True))
+        try:
+            return bool(st.tool_hint.get("python", True))
+        except:
+            return False
     
     def _format_subtask_prompt(self, sequence: str, plan: Plan, subtask: Subtask):
+        try:
+            prod_type =  subtask.expected_produce.get("type", "boolean")
+            prod_schema = subtask.expected_produce.get("schema", {})
+        except:
+            prod_type = "boolean"
+            prod_schema = "schema"
+           
         user_msg = _USER_TPL.format(
             sequence=sequence,
             problem_brief=plan.problem_brief,
@@ -167,8 +211,8 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
             inputs=subtask.inputs,
             tool_allowed={"python": self._python_allowed(subtask)},
             tool_max=self._tool_budget(subtask),
-            prod_type=subtask.expected_produce.get("type", "boolean"),
-            prod_schema=subtask.expected_produce.get("schema", {}),
+            prod_type=prod_type,
+            prod_schema=prod_schema,
         )
         return [
             {"role":"system","content":self.config.system_prompt},
