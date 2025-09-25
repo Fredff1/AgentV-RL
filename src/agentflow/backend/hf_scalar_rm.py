@@ -9,7 +9,7 @@ from agentflow.core.interfaces import SupportChatTemplate, CanRMScores
 from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin
 
 
-class HFRMBackend(SupportChatTemplate,CanRMScores,ChatTemplateDefaultsMixin):
+class HFRMBackend(ChatTemplateDefaultsMixin, SupportChatTemplate,CanRMScores):
 
     def __init__(self, config: Dict[str, Any], logger: Optional[Logger] = None):
         super().__init__()

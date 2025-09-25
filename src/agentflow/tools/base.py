@@ -13,6 +13,15 @@ class ToolCallRequest:
     content: str
     meta: Dict = field(default_factory=dict)
     
+    @classmethod
+    def from_dict(cls, data: Dict):
+        return ToolCallRequest(
+            index = data["index"],
+            name = data["name"],
+            content=data["content"],
+            meta=data.get("meta",{})
+        )
+    
 @dataclass
 class ToolCallResult:
     """Wrapper class for a tool call result
@@ -24,6 +33,18 @@ class ToolCallResult:
     error: Optional[Any]
     index: int
     call: ToolCallRequest
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> ToolCallResult:
+        return ToolCallResult(
+            tool_name=data["tool_name"],
+            request_content=data["request_content"],
+            output=data.get("output",""),
+            meta=data.get("meta",{}),
+            error=data.get("error",None),
+            index=data.get("index",0),
+            call=ToolCallRequest.from_dict(data.get("call")),
+        )
     
     
 

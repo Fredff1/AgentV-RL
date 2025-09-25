@@ -1,6 +1,7 @@
 # llm_judge_scoring.py
 from __future__ import annotations
 
+import os
 import json
 import argparse
 from pathlib import Path
@@ -190,6 +191,9 @@ def score_streaming(
     # 1) 初始化后端（同时可用于生成与 choice_probs）
     config = load_config(config_path)
     backend = VllmChoiceLogitsBackend(config)
+    model_path: str = backend.backend_config.get("model_path","")
+    if "qwen3" in os.path.basename(model_path).lower():
+        backend.set_chat_template_defaults(enable_thinking=False)
     registry = ToolRegistry()
     # search_tool = AsyncSearchTool(SearxngBackend("http://127.0.0.1:8888"))
     py_tool = PythonExecutionTool()

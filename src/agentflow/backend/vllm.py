@@ -8,7 +8,7 @@ from agentflow.core.interfaces import CanGenerate,SupportChatTemplate
 from agentflow.utils.log_util import get_logger
 from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin
 
-class VllmBackend(CanGenerate, SupportChatTemplate, ChatTemplateDefaultsMixin):
+class VllmBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate):
     """A VLLM backend for text generation
     """
     

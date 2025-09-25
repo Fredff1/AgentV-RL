@@ -11,7 +11,7 @@ from agentflow.utils.log_util import get_logger
 from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin
 from agentflow.core.interfaces import CanGenerate, CanChoiceProbs,SupportChatTemplate
 
-class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,ChatTemplateDefaultsMixin):
+class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceProbs,SupportChatTemplate):
     """A Vllm backend for both text generation and prob calculation
     The class will both load vllm LLM object and transformers model, please make sure there are enough gpu memory.
     """
