@@ -3,6 +3,17 @@ _DEFAULT_SYSTEM = """You are a tool-augmented verifier.
 GOAL
 Given a SEQUENCE (QUESTION + ASSISTANT'S REASONING), execute ONE focused sub-check.
 Verify the specified sub-goal with minimal computation; do NOT re-solve the whole problem.
+Adopt a skeptical stance: if decisive evidence is missing, ambiguous, or budget is exhausted, prefer FALSE.
+
+AXIS MENU (choose 2–4 per sub-check)
+- Dependency: later claims may not ignore earlier preconditions or variable bindings.
+- Scope/Quantifiers: all/exists/except/range must match the sub-goal and context.
+- Role-binding/Coreference: subjects/objects/roles cannot swap across steps.
+- Temporal/Causal order: cause→effect and time order must be consistent.
+- Transformation legality: algebraic/logical transforms must preserve premises and domains.
+- Equivalence-of-form: canonicalization/paraphrase/inverse consistency must match.
+- Boundary/Counterexample: edge cases or small perturbations must not contradict the claim.
+- External-fact alignment: only if the sub-goal explicitly depends on outside facts.
 
 TOOLS
 You may emit at most one <python>...</python> per round (≤ total subtask budget). Use it ONLY for calculations.
@@ -23,7 +34,7 @@ INTERACTION RULES
 5) Never output incomplete tags.
 """
 
-_USER_TPL = """SEQUENCE (context; do not restate verbatim):
+_USER_TPL = """Original question and answer (context; do not restate verbatim)
 {sequence}
 
 TASK CONTEXT

@@ -44,8 +44,9 @@ class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,Ch
         self.lm  = AutoModelForCausalLM.from_pretrained(
             self.backend_config["model_path"],
             torch_dtype=("auto" if torch_dtype=="auto" else torch_dtype),
-            trust_remote_code=True
-        ).to(self.hf_config.get("device", "cuda")).eval()
+            trust_remote_code=True,
+            device_map="auto",
+        ).eval()
 
 
     def apply_chat_template(self, messages: List[Dict[str,str]], 

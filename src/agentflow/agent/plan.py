@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Any, Optional, Callable, Sequence
 import traceback
+import logging
 
 
 from .context import AgentContext
@@ -15,7 +16,7 @@ from agentflow.tools.caller import ToolCaller
 from agentflow.tools.base import ToolParser      
 from agentflow.agent.planner.llm_planner import LLMPlanner
 from agentflow.agent.executor.executor import VerificationSubtaskExecutor, simple_aggregate_verdict
-from agentflow.agent.executor.integrator import integrate_and_predict
+from agentflow.agent.executor.integrator import integrate_and_predict, stats_and_has_fail, build_rollout_for_model
 from agentflow.utils.chat_template import is_chat_messages   
 from agentflow.utils.log_util import get_logger
 
@@ -98,6 +99,71 @@ class PlanSubtaskAgent(CanRMScores):
                 metas[idx]["subtask_reports"]=reports[idx]
                 metas[idx]["final_result"]=result
                 metas[idx]["judge"]=result.verdict
+            return scores, metas
+        except Exception as e:
+            scores = [-1] * len(sequences)
+            metas = [{"raw_text":"","judge":None} for _ in range(len(sequences))] 
+            traceback.print_exc()
+            return scores, metas
+        
+        
+        
+class RulePlanSubtaskAgent(CanRMScores):
+    """直接根据规则得到正确率以及分数
+
+    Args:
+        CanRMScores (_type_): _description_
+    """
+    def __init__(
+        self,
+        backend: CanGenerate,
+        tool_registry: Optional[ToolRegistry] = None,
+        logger: Optional[logging.Logger] = None
+    ):
+        super().__init__()
+        self.backend = backend
+        self.planner = LLMPlanner(backend)
+        registry = tool_registry or ToolRegistry()
+        py_tool = PythonExecutionTool()
+        registry.register(py_tool)
+        self.executor = VerificationSubtaskExecutor(
+            backend=backend,
+            registry=registry,
+        )
+        self.logger = logger
+    
+        
+    
+    def score(
+        self, 
+        sequences: Sequence[str], 
+        extra: List[Dict] = None, 
+        **kwargs
+    ) -> Tuple[List[float],List[Dict]]: 
+        try:
+            plans = self.planner.plan(sequences)
+            reports = self.executor.execute(sequences=sequences,plans=plans)
+            
+            scores = [0] * len(sequences)
+            metas = [{} for _ in range(len(sequences))] 
+            for idx, (seq, plan,report) in enumerate(zip(sequences, plans, reports)):
+                stats, has_fail = stats_and_has_fail(report)
+                rolout = build_rollout_for_model(sequence=seq,plan=plan,report=report)
+                if has_fail:
+                    num_corr = stats.get("passed",0)
+                    score = 0
+                    if num_corr > 0:
+                        score = min(0.5,num_corr * 0.1)
+                    verdict = False
+                else:
+                    score = 1
+                    verdict = True
+                scores[idx]=score
+                metas[idx]["raw_text"]=rolout
+                metas[idx]["plan"]=plan
+                metas[idx]["subtask_reports"]=report
+                metas[idx]["final_result"]=stats
+                metas[idx]["judge"]=verdict
             return scores, metas
         except Exception as e:
             scores = [-1] * len(sequences)

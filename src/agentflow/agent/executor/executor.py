@@ -121,6 +121,8 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
                 if sub_task_idx < len(subtasks):
                     input_msgs.append(self._format_subtask_prompt(seq,plan,subtasks[sub_task_idx]))
                     input_msg_indicies.append(idx)
+            if len(input_msgs) < 1:
+                break
             try:
                 answers, metas = self.agent.generate(input_msgs)
             except Exception as e:

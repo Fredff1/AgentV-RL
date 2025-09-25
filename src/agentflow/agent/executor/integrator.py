@@ -37,7 +37,7 @@ def _soft_trunc(s: str, limit: int) -> str:
     return s[:max(0, limit-3)] + "..."
 
 
-def _stats_and_has_fail(report: ExecutionReport) -> Tuple[Dict[str, int], bool]:
+def stats_and_has_fail(report: ExecutionReport) -> Tuple[Dict[str, int], bool]:
     passed = failed = uncertain = 0
     for r in report.subtask_reports:
         if not isinstance(r, VerificationSubtaskReport):
@@ -102,9 +102,9 @@ def build_rollout_for_model(
             verdict = "true" if rr.verdict is True else ("false" if rr.verdict is False else "none")
             rounds_used = getattr(rr, "rounds_used", 0) or 0
             tool_calls = len(rr.tool_traces) if getattr(rr, "tool_traces", None) else 0
-            lines.append(
-                f'      <result verdict="{verdict}" rounds="{rounds_used}" tool_calls="{tool_calls}">'
-            )
+            # lines.append(
+            #     f'      <result verdict="{verdict}" rounds="{rounds_used}" tool_calls="{tool_calls}">'
+            # )
             vtext = _soft_trunc(rr.verify_text or "", 2000)
             lines.append(f"        <verify>{_esc(vtext)}</verify>")
             lines.append("      </result>")
@@ -161,13 +161,13 @@ def integrate_and_predict(
     per_stats: List[Dict] = []
     for idx, (sequence, plan, report) in enumerate(zip(sequences,plans,reports)):
         
-        stats, has_fail = _stats_and_has_fail(report)
+        stats, has_fail = stats_and_has_fail(report)
         rollout = build_rollout_for_model(
             sequence=sequence, plan=plan, report=report,
             include_tool_traces=include_tool_traces
         )
 
-        if has_fail:
+        if stats.get("failed",2) > 0:
             prediction = FinalPrediction(
                 sequence_id=report.sequence_id,
                 verdict=False,
