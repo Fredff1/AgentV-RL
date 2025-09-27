@@ -167,7 +167,7 @@ def integrate_and_predict(
             include_tool_traces=include_tool_traces
         )
 
-        if stats.get("failed",2) > 0:
+        if stats.get("failed",2) > 1:
             prediction = FinalPrediction(
                 sequence_id=report.sequence_id,
                 verdict=False,

@@ -24,6 +24,7 @@ class ExecutorConfig:
     system_prompt: str = _DEFAULT_SYSTEM
     helper_code_snippets: List[str] = field(default_factory=list)
     helper_modules: List[str] = field(default_factory=list)
+    enable_early_stop: bool = False
 
 
 
@@ -157,7 +158,7 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
                 )
                 subtask_reports_per_plan[plan_idx].append(report)
                 
-                if verdict is False:
+                if verdict is False and self.config.enable_early_stop:
                     stopped[plan_idx] = True
             sub_task_idx+=1
             process_bar.update(1)
