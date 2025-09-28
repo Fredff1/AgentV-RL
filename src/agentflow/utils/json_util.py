@@ -10,6 +10,60 @@ from pathlib import Path
 import collections.abc as cabc
 
 
+def sanitize_backslashes_preserve_valid_escapes(s: str) -> str:
+    """
+    仅在 JSON 字符串内部把【非法】反斜杠加倍：
+    """
+    out = []
+    in_str = False
+    pending_escape = False  
+    i = 0
+    n = len(s)
+
+    while i < n:
+        ch = s[i]
+
+        if in_str:
+            if pending_escape:
+                out.append(ch)
+                pending_escape = False
+            else:
+                if ch == '\\':
+                    if i + 1 < n:
+                        nxt = s[i + 1]
+                        if nxt in '"\\/bfnrt' or nxt == 'u':
+                            out.append('\\')
+                            pending_escape = True
+                        else:
+                            out.append('\\\\')
+                    else:
+                        out.append('\\\\')
+                elif ch == '"':
+                    in_str = False
+                    out.append(ch)
+                else:
+                    out.append(ch)
+        else:
+            out.append(ch)
+            if ch == '"':
+                in_str = True
+                pending_escape = False
+
+        i += 1
+
+    return ''.join(out)
+
+def _try_load_with_sanitize(candidate: str) -> Optional[Any]:
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        fixed = sanitize_backslashes_preserve_valid_escapes(candidate)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            return None
+
+
 class JsonUtil:
 
     @staticmethod
@@ -89,19 +143,10 @@ class JsonUtil:
                 if not stack and start_idx is not None:
                     # 一个完整的顶层 JSON 片段结束
                     candidate = text[start_idx:i+1]
-                    # 尝试严格 JSON 解析
-                    try:
-                        objs.append(json.loads(candidate))
-                    except json.JSONDecodeError:
-                        # 如果你需要支持宽松 JSON（如尾逗号/单引号/注释），
-                        # 可以启用 json5 作为回退（第三方库：pip install json5）:
-                        # import json5
-                        # try:
-                        #     objs.append(json5.loads(candidate))
-                        # except Exception:
-                        #     pass
-                        pass
-                    start_idx = None
+                    parsed = _try_load_with_sanitize(candidate)
+                    if parsed is not None:
+                        objs.append(parsed)
+                        start_idx = None
 
         return objs or None
      
@@ -224,3 +269,137 @@ def load_dataset(path: str):
     else:
         raise ValueError("Dataset format not supported")
     return data
+
+if __name__ == "__main__":
+    JSON_STR = """
+```json
+{
+  "problem_brief": "Find the value of c such that a line from (c,0) to (3,3) divides five unit squares arranged in an 'L' shape into two regions of equal area.",
+  "asked_quantity": "c = \\frac{4}{3}",
+  "assumptions_required": [
+    "The five unit squares form a 2x2 square plus one additional square attached, resembling an 'L' shape.",
+    "The line from (c,0) to (3,3) divides the total area of 5 into two equal parts of 2.5 each."
+  ],
+  "subtasks": [
+    {
+      "id": "s1",
+      "title": "Shape Verification",
+      "rationale": "Confirm the arrangement of the five unit squares matches the 'L' shape description.",
+      "category": "intent_check",
+      "tool_hint": {"python": false, "search": false, "max_calls": 0}
+    },
+    {
+      "id": "s2",
+      "title": "Area Assumption",
+      "rationale": "Verify the total area is correctly assumed to be 5, split into 2.5 each.",
+      "category": "assumption_audit",
+      "tool_hint": {"python": true, "search": false, "max_calls": 1}
+    },
+    {
+      "id": "s3",
+      "title": "Line Equation",
+      "rationale": "Check the derivation of the line equation from points (c,0) to (3,3).",
+      "category": "constraint_parse",
+      "tool_hint": {"python": false, "search": false, "max_calls": 0}
+    },
+    {
+      "id": "s4",
+      "title": "Integral Setup",
+      "rationale": "Validate the integral setup for the area under the line from x=c to x=3.",
+      "category": "evidence_alignment",
+      "tool_hint": {"python": false, "search": false, "max_calls": 0}
+    },
+    {
+      "id": "s5",
+      "title": "Integral Evaluation",
+      "rationale": "Verify the steps in evaluating the integral and simplifying the expression.",
+      "category": "numeric_spotcheck",
+      "tool_hint": {"python": true, "search": false, "max_calls": 1}
+    },
+    {
+      "id": "s6",
+      "title": "Quadratic Solution",
+      "rationale": "Check the solution of the quadratic equation to ensure correct roots.",
+      "category": "derivative_check",
+      "tool_hint": {"python": true, "search": false, "max_calls": 1}
+    },
+    {
+      "id": "s7",
+      "title": "Root Selection",
+      "rationale": "Confirm the rejection of c=3 and selection of c=4/3 as the valid solution.",
+      "category": "edge_case",
+      "tool_hint": {"python": false, "search": false, "max_calls": 0}
+    },
+    {
+      "id": "s8",
+      "title": "Final Consistency",
+      "rationale": "Ensure all steps align and the final answer matches the asked quantity.",
+      "category": "final_consistency",
+      "tool_hint": {"python": true, "search": false, "max_calls": 1}
+    }
+  ],
+  "stop_conditions": ["Mismatch in integral evaluation or quadratic solution."]
+}
+```
+Raw: ```json
+{
+  "problem_brief": "Find the inclination angle of the line √3x + y - 1 = 0.",
+  "asked_quantity": "θ = 120° (inclination angle measured in degrees)",
+  "assumptions_required": ["The line is given in Cartesian coordinates.", "The inclination angle is measured counterclockwise from the positive x-axis."],
+  "subtasks": [
+    {
+      "id": "s1",
+      "title": "Intent verification",
+      "rationale": "Ensure the problem is correctly understood as finding the inclination angle of the given line.",
+      "category": "intent_check",
+      "tool_hint": {"python": false, "search": false, "max_calls": 0}
+    },
+    {
+      "id": "s2",
+      "title": "Assumption audit",
+      "rationale": "Verify that the line is given in Cartesian coordinates and the angle is measured counterclockwise.",
+      "category": "assumption_audit",
+      "tool_hint": {"python": false, "search": false, "max_calls": 0}
+    },
+    {
+      "id": "s3",
+      "title": "Slope extraction",
+      "rationale": "Confirm the slope is correctly derived from the line equation.",
+      "category": "constraint_parse",
+      "tool_hint": {"python": true, "search": false, "max_calls": 1}
+    },
+    {
+      "id": "s4",
+      "title": "Slope-angle relationship",
+      "rationale": "Check the correctness of the relationship tan(θ) = m.",
+      "category": "evidence_alignment",
+      "tool_hint": {"python": false, "search": false, "max_calls": 0}
+    },
+    {
+      "id": "s5",
+      "title": "Angle calculation",
+      "rationale": "Verify the calculation of θ from tan(θ) = -√3.",
+      "category": "numeric_spotcheck",
+      "tool_hint": {"python": true, "search": false, "max_calls": 1}
+    },
+    {
+      "id": "s6",
+      "title": "Angle normalization",
+      "rationale": "Ensure the angle is correctly identified within the standard range (0° to 180°).",
+      "category": "derivative_check",
+      "tool_hint": {"python": true, "search": false, "max_calls": 1}
+    },
+    {
+      "id": "s7",
+      "title": "Final consistency",
+      "rationale": "Check for contradictions between the slope and the final angle.",
+      "category": "final_consistency",
+      "tool_hint": {"python": true, "search": false, "max_calls": 1}
+    }
+  ],
+  "stop_conditions": ["If any subtask fails to confirm its respective claim."]
+}
+```  
+    """
+    result = JsonUtil.parse_json(JSON_STR)
+    print(result)
