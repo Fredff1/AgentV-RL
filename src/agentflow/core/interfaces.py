@@ -1,5 +1,5 @@
 # src/core/interfaces.py
-from typing import List, Tuple, Dict, Any, Protocol, Sequence, Union, runtime_checkable
+from typing import List, Tuple, Dict, Any, Protocol, Sequence, Union, runtime_checkable, ContextManager
 from abc import ABC, abstractmethod
 
 @runtime_checkable
@@ -37,6 +37,11 @@ class SupportChatTemplate(Protocol):
         ...
     def reset_chat_template_defaults(self) -> None: 
         """Clear default chat template parameters
+        """
+        ...
+        
+    def using_chat_template_defaults(self, **overrides: Any) -> ContextManager[None]: 
+        """A simple context manager for using chat_template with temp parameters
         """
         ...
 

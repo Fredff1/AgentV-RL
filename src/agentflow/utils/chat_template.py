@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Any, List, Dict, Optional, Tuple, Union
+from contextlib import contextmanager
 
 MessageDict = Dict[str, Any] 
 
@@ -232,10 +233,10 @@ def __safe_apply_chat_template(
 
 
 class ChatTemplateDefaultsMixin:
-    """为 backend 提供统一的 chat template 默认参数管理。"""
 
     def __init__(self, *args, **kwargs):
         self._chat_template_defaults = {}
+        self._overlays: List[Dict[str, Any]] = []
         super().__init__(*args, **kwargs)
 
     def set_chat_template_defaults(self, **defaults: Any) -> None:
@@ -246,3 +247,18 @@ class ChatTemplateDefaultsMixin:
 
     def reset_chat_template_defaults(self) -> None:
         self._chat_template_defaults={}
+        
+    def _merge_for_call(self, call_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(self._chat_template_defaults)
+        for ov in self._overlays: 
+            merged.update(ov)
+        merged.update(call_kwargs)
+        return merged
+    
+    @contextmanager
+    def using_chat_template_defaults(self, **overrides: Any):
+        self._overlays.append(dict(overrides))
+        try:
+            yield
+        finally:
+            self._overlays.pop()

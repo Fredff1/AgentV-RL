@@ -22,7 +22,7 @@ class MockBackend(ChatTemplateDefaultsMixin):
         add_generation_prompt: bool = True,
         **additional_params: Any,
     ):
-        merged = {**self._chat_template_defaults, **additional_params}
+        merged = self._merge_for_call(additional_params)
         # —— 这里打印出“真正生效”的参数 —— #
         print(f"[{self.name}] defaults = {self.get_chat_template_defaults()}")
         print(f"[{self.name}] call_params = {additional_params}")
@@ -61,4 +61,8 @@ if __name__ == "__main__":
     b.apply_chat_template(msgs, max_tokens=128)  # max_tokens 以本次为准：128
     
     a.reset_chat_template_defaults()
+    a.apply_chat_template(msgs)
+    
+    with a.using_chat_template_defaults(tmp = "Test"):
+        a.apply_chat_template(msgs)
     a.apply_chat_template(msgs)
