@@ -233,7 +233,6 @@ def __safe_apply_chat_template(
 
 class ChatTemplateDefaultsMixin:
     """为 backend 提供统一的 chat template 默认参数管理。"""
-    _chat_template_defaults: Dict[str, Any]
 
     def __init__(self, *args, **kwargs):
         self._chat_template_defaults = {}
@@ -246,4 +245,4 @@ class ChatTemplateDefaultsMixin:
         return dict(self._chat_template_defaults)
 
     def reset_chat_template_defaults(self) -> None:
-        self._chat_template_defaults.clear()
+        self._chat_template_defaults={}

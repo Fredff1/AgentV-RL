@@ -17,7 +17,6 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
     """
     def __init__(self, config: Dict[str, Any], logger: Logger | None = None, **kwargs):
         super().__init__()
-        ChatTemplateDefaultsMixin.__init__(self)
         self.config = config
         self.logger = logger or get_logger(config, __name__)
         self._parse_config()

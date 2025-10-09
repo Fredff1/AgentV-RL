@@ -14,7 +14,6 @@ class VllmBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate):
     
     def __init__(self, config: Dict[str,Any], logger: Logger = None, **kwargs):
         super().__init__()
-        ChatTemplateDefaultsMixin.__init__(self)
         self.config = config
         if logger:
             self.logger = logger

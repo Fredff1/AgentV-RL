@@ -11,12 +11,83 @@ from agentflow.utils.tag_util import find_tags
 
 from agentflow.core.interfaces import CanGenerate
 
+RETRY_FORMAT_SUFFIX = "Output a standard json-format object only"
+
+MINIMAL_FALLBACK_OBJ = {
+    "problem_brief": "",
+    "asked_quantity": "",
+    "assumptions_required": [],
+    "subtasks": [
+        {"id":"s0","title":"intent check","rationale":"WHAT vs RESULT",
+         "category":"intent_check","inputs":{"from":["QUESTION","REASONING"]},
+         "tool_hint":{"python":False,"search":False,"max_calls":1},
+         "expected_produce":{"type":"boolean","schema":{"meaning":"match"}},
+         "stop_on_fail": True},
+        {"id":"s1","title":"assumption audit","rationale":"illegal premise?",
+         "category":"assumption_audit","inputs":{"from":["QUESTION","REASONING"]},
+         "tool_hint":{"python":False,"search":False,"max_calls":1},
+         "expected_produce":{"type":"boolean","schema":{"meaning":"ok"}},
+         "stop_on_fail": True}
+    ],
+    "stop_conditions": ["asked_quantity mismatch confirmed"]
+}
+
+FIXED_SELF_SOLVE_SUBTASK = {
+    "id": "fixed_self_solve",
+    "title": "Self-solve then compare with reference answer",
+    "rationale": "Independently solve the question without using the provided answer; then compare with answer a.",
+    "category": "self_solve_compare",
+    "inputs": {"from": ["QUESTION", "GIVEN_ANSWER"]}, 
+    "tool_hint": {"python": True, "search": False, "max_calls": 2},
+    "expected_produce": {
+        "type": "boolean",
+        "schema": {
+            "meaning": "is the reference answer correct per an independent solution?",
+            "must_output": {
+                "self_result": "model's independent final result (value/expression + unit/type)", 
+                "compare": "differences or proof of equivalence vs a",
+                "binding": "optional: python check / key equation chain"
+            },
+            "tolerance": "1e-6"
+        }
+    },
+    "stop_on_fail": False
+}
+
+FIXED_OVERALL_SUBTASK = {
+    "id": "fixed_overall",
+    "title": "Overall QA Judgement",
+    "rationale": "Directly judge correctness using only QUESTION and full REASONING (final answer included).",
+    "category": "final_consistency",
+    "inputs": {"from": ["QUESTION", "REASONING"]},
+    "tool_hint": {"python": True, "search": False, "max_calls": 1},
+    "expected_produce": {
+        "type": "boolean",
+        "schema": {
+            "meaning": "is the final stated answer correct?",
+            "must_extract_final_answer": True,
+            "must_state_reason": True
+        }
+    },
+    "stop_on_fail": False
+}
+
+
 class JsonPlanParser:
     """Robust JSON extractor + validator."""
     REQUIRED_TOP = ["problem_brief", "asked_quantity", "assumptions_required", "subtasks"]
     REQUIRED_SUB = ["id", "title", "rationale", "category", "expected_produce", "stop_on_fail"]
 
-    
+    @classmethod
+    def _inject_fixed_subtasks(cls, obj: Dict[str, Any]) -> None:
+        """Append fixed subtasks if missing. The order is: self_solve -> overall."""
+        ids = {st.get("id", "") for st in obj["subtasks"] if isinstance(st, dict)}
+        assert isinstance(obj["subtasks"],list)
+        if FIXED_SELF_SOLVE_SUBTASK["id"] not in ids:
+            obj["subtasks"].insert(0, dict(FIXED_SELF_SOLVE_SUBTASK))
+        ids.add(FIXED_SELF_SOLVE_SUBTASK["id"])
+        if FIXED_OVERALL_SUBTASK["id"] not in ids:
+            obj["subtasks"].insert(0, dict(FIXED_OVERALL_SUBTASK))
 
     @classmethod
     def validate_and_coerce(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -39,6 +110,8 @@ class JsonPlanParser:
             if not st.get("id"): st["id"] = f"s{i}"
             fixed.append(st)
         obj["subtasks"] = fixed
+        
+        cls._inject_fixed_subtasks(obj)
 
         obj.setdefault("stop_conditions", [
             "asked_quantity mismatch confirmed",
@@ -48,16 +121,7 @@ class JsonPlanParser:
 
     @staticmethod
     def to_plan(obj: Dict[str, Any]) -> Plan:
-        subtasks = [Subtask(
-            id=FIXED_OVERALL_SUBTASK["id"],
-            title=FIXED_OVERALL_SUBTASK["title"],
-            rationale=FIXED_OVERALL_SUBTASK["rationale"],
-            category=FIXED_OVERALL_SUBTASK["category"],
-            inputs=FIXED_OVERALL_SUBTASK["inputs"],
-            tool_hint=FIXED_OVERALL_SUBTASK["tool_hint"],
-            expected_produce=FIXED_OVERALL_SUBTASK["expected_produce"],
-            stop_on_fail=FIXED_OVERALL_SUBTASK["stop_on_fail"],
-        )]
+        subtasks = []
         for st in obj.get("subtasks", []):
             subtasks.append(Subtask(
                 id=st["id"],
@@ -80,46 +144,7 @@ class JsonPlanParser:
         )
         
         
-RETRY_FORMAT_SUFFIX = (
-   "Output a standard json-format object only",
-)
 
-MINIMAL_FALLBACK_OBJ = {
-    "problem_brief": "",
-    "asked_quantity": "",
-    "assumptions_required": [],
-    "subtasks": [
-        {"id":"s0","title":"intent check","rationale":"WHAT vs RESULT",
-         "category":"intent_check","inputs":{"from":["QUESTION","REASONING"]},
-         "tool_hint":{"python":False,"search":False,"max_calls":1},
-         "expected_produce":{"type":"boolean","schema":{"meaning":"match"}},
-         "stop_on_fail": True},
-        {"id":"s1","title":"assumption audit","rationale":"illegal premise?",
-         "category":"assumption_audit","inputs":{"from":["QUESTION","REASONING"]},
-         "tool_hint":{"python":False,"search":False,"max_calls":1},
-         "expected_produce":{"type":"boolean","schema":{"meaning":"ok"}},
-         "stop_on_fail": True}
-    ],
-    "stop_conditions": ["asked_quantity mismatch confirmed"]
-}
-
-FIXED_OVERALL_SUBTASK = {
-    "id": "fixed_overall",
-    "title": "Overall QA Judgement",
-    "rationale": "Directly judge correctness using only QUESTION and full REASONING (final answer included).",
-    "category": "final_consistency",   
-    "inputs": {"from": ["QUESTION", "REASONING"]},
-    "tool_hint": {"python": False, "search": False, "max_calls": 1},
-    "expected_produce": {
-        "type": "boolean",
-        "schema": {
-            "meaning": "is the final stated answer correct?",
-            "must_extract_final_answer": True,     
-            "must_state_reason": True              
-        }
-    },
-    "stop_on_fail": False
-}
 
 class LLMPlanner(BasePlanner):
     def __init__(self, backend: CanGenerate, system_prompt: Optional[str]=None, * ,max_retries: int = 3):
@@ -173,30 +198,42 @@ class LLMPlanner(BasePlanner):
                 failed_idxs.append(i)
 
 
-        for i in failed_idxs:
-            attempt = 1
-            last_err: Optional[Exception] = None
-            strengthen = True  
+        attempt = 1
+        last_err: Optional[Exception] = None
+        while failed_idxs and attempt <= self.max_retries:
+            try:
+                retry_prompts = [
+                    self._build_prompt(sequences[i], strengthen_format=True)
+                    for i in failed_idxs
+                ]
+                retry_extra = None
+                if extra is not None:
+                    retry_extra = [extra[i] if i < len(extra) and extra[i] is not None else {} for i in failed_idxs]
 
-            while attempt <= self.max_retries:
-                try:
-                    prompt_i = self._build_prompt(sequences[i], strengthen_format=strengthen)
-                    texts_i, metas_i = self.backend.generate(
-                        [prompt_i],
-                        extra=[(extra[i] if extra else {})],
-                    )
-                    raw_i = texts_i[0]
-                    obj_i = self._parse_plan_obj(raw_i)
-                    plans[i] = self._coerce_to_plan(obj_i)
-                    break  
+                retry_texts, retry_metas = self.backend.generate(retry_prompts, extra=retry_extra)
 
-                except Exception as e:
-                    last_err = e
-                    attempt += 1
+                next_failed: List[int] = []
+                for pos, raw in enumerate(retry_texts):
+                    orig_i = failed_idxs[pos]
+                    try:
+                        obj_i = self._parse_plan_obj(raw)
+                        plans[orig_i] = self._coerce_to_plan(obj_i)
+                    except Exception as e:
+                        last_err = e
+                        next_failed.append(orig_i)
 
-            if plans[i] is None:
+                failed_idxs = next_failed
+                attempt += 1
+
+            except Exception as e:
+                last_err = e
+                attempt += 1
+
+        if failed_idxs:
+            for i in failed_idxs:
                 try:
                     plans[i] = self._coerce_to_plan(MINIMAL_FALLBACK_OBJ)
                 except Exception:
                     raise last_err or RuntimeError("planner failed without explicit error")
+
         return [p for p in plans]  

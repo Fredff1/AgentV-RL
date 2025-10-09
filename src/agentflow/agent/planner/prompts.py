@@ -12,7 +12,7 @@ Planning principles:
 - Always create a 'global consistency' subtask (category: final_consistency) that detects contradictions or mismatches between the asked_quantity and all produced/claimed results.
 - Use tools only when they increase decisiveness (e.g., simple arithmetic/string/equality checks → python=true; external facts → search=true). Prefer minimal calls.
 - For important tasks like derivative_check, you are allowed to produce similar subtasks in different forms to improve accuracy.
-- Keep 5-10 atomic subtasks total.
+- Keep 4-6 atomic subtasks total.
 
 Be concise and schema-faithful."""
 

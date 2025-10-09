@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from tqdm import tqdm
 
 from agentflow.agent.basic import ToolDrivenAgent, AgentContext
-from agentflow.core.interfaces import CanGenerate
+from agentflow.core.interfaces import CanGenerate, SupportChatTemplate
 from agentflow.tools.registry import ToolRegistry
 from agentflow.tools.caller import ToolCaller
 from agentflow.tools.parser import TagToolParser
@@ -124,7 +124,11 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
             if len(input_msgs) < 1:
                 break
             try:
+                if sub_task_idx <= 1 and isinstance(self.agent.backend,SupportChatTemplate):
+                    self.agent.backend.set_chat_template_defaults(enable_thinking=True)
                 answers, metas = self.agent.generate(input_msgs)
+                if isinstance(self.agent.backend,SupportChatTemplate):
+                    self.agent.backend.set_chat_template_defaults(enable_thinking=False)
             except Exception as e:
                 print(e)
                 sub_task_idx += 1

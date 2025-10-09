@@ -1,8 +1,8 @@
 # src/core/interfaces.py
-from typing import List, Tuple, Dict, Any, Protocol, Sequence, Union
+from typing import List, Tuple, Dict, Any, Protocol, Sequence, Union, runtime_checkable
 from abc import ABC, abstractmethod
 
-
+@runtime_checkable
 class SupportChatTemplate(Protocol):
     """Protocol for components that can render chat-style messages into a model-ready
     prompt using a chat template (and optionally tokenize the result).
@@ -57,6 +57,7 @@ class CanGenerate(Protocol):
         """
         ...
 
+@runtime_checkable
 class CanRMScores(Protocol):
     """Protocol for a component that can assign scalar scores to given sequences
     (e.g., reward model / preference model outputs). 
@@ -73,6 +74,7 @@ class CanRMScores(Protocol):
         """
         ...
 
+@runtime_checkable
 class CanChoiceProbs(Protocol):
     """
     Protocol for a component that can compute **choice probabilities** for one or more textual
@@ -113,5 +115,6 @@ class CanChoiceProbs(Protocol):
         """
         ...
 
+@runtime_checkable
 class CanContLogprobs(Protocol):
     def continuation_logprobs(self, prefixes: Sequence[str], continuations: Sequence[str]) -> List[float]: ...
