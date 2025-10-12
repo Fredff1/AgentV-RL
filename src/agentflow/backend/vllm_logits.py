@@ -47,6 +47,7 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
             trust_remote_code=True,
             device_map="auto",
         ).eval()
+        self.use_tqdm = self.vllm_config.get("use_tqdm",True)
 
 
     def apply_chat_template(self, messages: List[List[Dict[str,str]]], 
@@ -99,7 +100,7 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
                 prompts[i]=left_truncate_text_by_token(self.tokenizer, str(prompts[i]), max_prompt_len)
             
         
-        results = self.vllm.generate(prompts=prompts, sampling_params=self.sampling_params)
+        results = self.vllm.generate(prompts=prompts, sampling_params=self.sampling_params,use_tqdm=self.use_tqdm,)
         texts = [r.outputs[0].text if r.outputs else "" for r in results]
         metas = [{"raw_output": r, "prompt":prompt} for r, prompt in zip(results, prompts)]
         return texts, metas

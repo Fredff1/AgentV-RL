@@ -288,6 +288,12 @@ def _to_bool(text: str) -> Optional[bool]:
         return False
     return None
 
+def _to_float(text: str) -> float:
+    try:
+        return float(text)
+    except:
+        return 0
+
 
 def integrate_and_predict(
     *,
@@ -308,7 +314,7 @@ def integrate_and_predict(
         )
         rollout = f"{sequence}\nJudge Rollout:\n{rollout}"
 
-        if stats.get("failed",2) > 1:
+        if stats.get("failed", 3) > 1:
             prediction = FinalPrediction(
                 sequence_id=report.sequence_id,
                 verdict=False,
@@ -344,3 +350,76 @@ def integrate_and_predict(
         
 
     return predictions
+
+
+POINTWISE_SYSTEM_PROMPT = """
+You are a strict judge for a verification rollout. 
+
+## TASK
+
+You will receive a question and an assistant's answer towards it.
+you are required to produce a **score** from 0 to 10 (integer or one decimal), reflecting your confidence / quality in the reasoning and result. 
+* 0 means totally incorrect / many flaws; 
+* 10 means perfect, no doubts, rigorous, chain is fully justified.  
+
+## RULE
+
+* Begin with a <reasoning></reasoning> block with your detailed analysis for the given task.
+* Finally put your score exactly in a <answer></answer> block.
+* Your scoring must consider both **process** (correctness / consistency of subtask chain, no hidden leaps, domain checks, edge cases) and **outcome** (final answer correctness, matching type/range).  
+
+
+
+"""
+USER_PROMPT="""
+The question, answer and agent's rollout:
+{sequence}
+
+"""
+
+def point_wise_score(
+    sequences: List[str],
+    plans: List[Plan],
+    reports: List[ExecutionReport],
+    backend: CanGenerate,
+) -> Tuple[List[float], List[Dict]]:
+    scores: List[float] = [0] * len(sequences)
+    rollouts_for_generation = []
+    rollout_for_generation_idx: List[int] = []
+    per_metas: List[Dict] = [{}] * len(sequences)
+    for idx, (sequence, plan, report) in enumerate(zip(sequences,plans,reports)):
+        
+        stats, has_fail = stats_and_has_fail(report)
+        rollout = build_rollout_for_model(
+            sequence=sequence, plan=plan, report=report
+        )
+        rollout = f"{sequence}\nJudge Rollout:\n{rollout}"
+
+        if stats.get("failed", 3) > 1:
+            scores[idx]=0
+            continue
+        # rollouts_for_generation.append(rollout)
+        rollouts_for_generation.append(sequence)
+        rollout_for_generation_idx.append(idx)
+        
+    if not rollouts_for_generation:
+        return scores, per_metas
+    
+    input_msgs = []
+    for rollout in rollouts_for_generation:
+        msg = [
+            {"role":"system","content":POINTWISE_SYSTEM_PROMPT},
+            {"role":"user","content":USER_PROMPT.format(sequence=rollout)},
+        ]
+        input_msgs.append(msg)
+    
+    results, metas = backend.generate(input_msgs)
+    for idx, (indice,result, meta) in enumerate(zip(rollout_for_generation_idx, results, metas)):
+        score = 0
+        answer_tags = find_tags(result,["answer"])
+        if answer_tags:
+            score = _to_float(answer_tags[-1].body)
+        scores[indice] = score
+        per_metas[indice].update(meta)
+        per_metas[indice]["score_rollout"]=result
+    return scores, per_metas

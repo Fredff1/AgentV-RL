@@ -25,6 +25,7 @@ class ExecutorConfig:
     helper_code_snippets: List[str] = field(default_factory=list)
     helper_modules: List[str] = field(default_factory=list)
     enable_early_stop: bool = False
+    use_tqdm: bool = False
 
 
 
@@ -109,7 +110,8 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
         for subtask_list in subtasks_per_plan:
             if len(subtask_list) > max_subtasks:
                 max_subtasks = len(subtask_list)
-        process_bar = tqdm(total=max_subtasks,desc="Processing subtasks:")
+        if self.config.use_tqdm:
+            process_bar = tqdm(total=max_subtasks,desc="Processing subtasks:")
         while sub_task_idx < max_subtasks:
             input_msgs = []
             input_msg_indicies: List[int] = []
@@ -124,15 +126,12 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
             if len(input_msgs) < 1:
                 break
             try:
-                if sub_task_idx <= 1 and isinstance(self.agent.backend,SupportChatTemplate):
-                    self.agent.backend.set_chat_template_defaults(enable_thinking=True)
                 answers, metas = self.agent.generate(input_msgs)
-                if isinstance(self.agent.backend,SupportChatTemplate):
-                    self.agent.backend.set_chat_template_defaults(enable_thinking=False)
             except Exception as e:
                 print(e)
                 sub_task_idx += 1
-                process_bar.update(1)
+                if self.config.use_tqdm:
+                    process_bar.update(1)
                 continue
             for idx, (plan_idx, answer, meta) in enumerate(zip(input_msg_indicies,answers,metas)):
                 curr_plan = subtasks_per_plan[plan_idx]
@@ -164,7 +163,8 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
                 if verdict is False and self.config.enable_early_stop:
                     stopped[plan_idx] = True
             sub_task_idx+=1
-            process_bar.update(1)
+            if self.config.use_tqdm:
+                process_bar.update(1)
             
         for plan_idx, (plan, reports) in enumerate(zip(plans, subtask_reports_per_plan)):
             num_have = len(reports)

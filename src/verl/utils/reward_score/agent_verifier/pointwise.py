@@ -1,7 +1,7 @@
 from typing import Dict, Any
 
-from utils.tag_util import find_tags, extract_answer_tag
-from verl.utils.reward_score.agent_rm.util import compute_tool_bonus
+from agentflow.utils.tag_util import find_tags, extract_answer_tag
+
 
 def parse_pointwise_score(score_str: str):
     score_str = extract_answer_tag(score_str)
@@ -51,7 +51,7 @@ def compute_pointwise_reward(
         )
         
     
-    bonus = compute_tool_bonus(solution_str=solution_str,extra_info=extra_info)
+    bonus = 0
     reward += bonus
     
     return reward

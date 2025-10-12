@@ -309,8 +309,15 @@ def pad_2d_list_to_length(response, pad_token_id, max_length=None):
     pad a 2D list (e.g. responses, logprobs) to a 2D tensor.
     """
     response_length = max(len(sub_list) for sub_list in response)
-    target_length = max_length if max_length is not None and max_length > response_length else response_length
-    padded_response = [tuple(sub_list) + (pad_token_id,) * (target_length - len(sub_list)) for sub_list in response]
+    target_length = max_length if max_length is not None else response_length
+    padded_response = []
+    for sub_list in response:
+        if len(sub_list) < target_length:
+            padded = tuple(sub_list) + (pad_token_id,) * (target_length - len(sub_list))
+        else:
+            padded = tuple(sub_list[:target_length])
+        padded_response.append(padded)
+    # padded_response = [tuple(sub_list) + (pad_token_id,) * (target_length - len(sub_list)) for sub_list in response]
     tensor = torch.tensor(padded_response)
     return tensor
 

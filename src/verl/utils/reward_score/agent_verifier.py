@@ -4,9 +4,9 @@ from typing import Dict, Any
 
 
 
-from verl.utils.reward_score.agent_rm.pairwise import compute_pairwise_reward
-from verl.utils.reward_score.agent_rm.pointwise import compute_pointwise_reward
-from verl.utils.reward_score.agent_rm.bool import compute_bool_reward
+from verl.utils.reward_score.agent_verifier.pairwise import compute_pairwise_reward
+from verl.utils.reward_score.agent_verifier.pointwise import compute_pointwise_reward
+from verl.utils.reward_score.agent_verifier.bool import compute_bool_reward
 
 def compute_agentic_reward(
     data_source: str,

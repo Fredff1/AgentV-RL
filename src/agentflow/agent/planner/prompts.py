@@ -12,7 +12,7 @@ Planning principles:
 - Always create a 'global consistency' subtask (category: final_consistency) that detects contradictions or mismatches between the asked_quantity and all produced/claimed results.
 - Use tools only when they increase decisiveness (e.g., simple arithmetic/string/equality checks → python=true; external facts → search=true). Prefer minimal calls.
 - For important tasks like derivative_check, you are allowed to produce similar subtasks in different forms to improve accuracy.
-- Keep 4-6 atomic subtasks total.
+- Keep 2-4 atomic subtasks total.
 
 Be concise and schema-faithful."""
 
@@ -49,7 +49,6 @@ REQUIREMENTS:
   4) Include at least one final_consistency subtask that explicitly checks for contradictions across all claimed intermediate/final results and ensures alignment with asked_quantity.
 - Subtask quality:
   - Each subtask verifies a single falsifiable claim with a clear pass/fail criterion (avoid open-ended “explain” tasks).
-  - Keep 5-10 atomic subtasks total.
 - Tools:
   - If a tool like python or search may help the verification step, set the corresponding flag in tool_hint. Keep max_calls minimal (usually 0–2).
 - JSON hygiene:

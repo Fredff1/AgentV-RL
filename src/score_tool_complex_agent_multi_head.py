@@ -19,7 +19,7 @@ from agentflow.tools.search.base_search import AsyncSearchTool
 from agentflow.tools.search.backend.searxng import SearxngBackend
 from agentflow.tools.code.python_execution import PythonExecutionTool
 from agentflow.inference.scorers.generative_scorer import BoolLogitsGenerativeScorer
-from agentflow.agent.plan import PlanSubtaskAgent
+from agentflow.agent.plan import PlanSubtaskAgent, PlanSubtaskMultiheadAgent
 from agentflow.utils.tag_util import find_tags
 
 
@@ -215,7 +215,7 @@ def score_streaming(
         with open(judge_user_path, "r", encoding="utf-8") as f:
             user_prompt = f.read()
 
-    scorer = PlanSubtaskAgent(
+    scorer = PlanSubtaskMultiheadAgent(
         backend=backend,
         prob_calculator=backend,
         tool_registry=registry,

@@ -400,6 +400,14 @@ class RayWorkerGroup(WorkerGroup):
                 if detached:
                     ray_cls_with_init.update_options({"lifetime": "detached"})
 
+                # retry options for robustness
+                ray_cls_with_init.update_options({
+                    "max_restarts": 5,          
+                    "max_task_retries": 16,    
+                    # "memory": 8 * 1024**3,     
+
+                })
+                
                 # create a worker
                 worker = ray_cls_with_init(
                     placement_group=pg,

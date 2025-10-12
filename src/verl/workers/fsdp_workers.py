@@ -516,8 +516,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 layered_summon=self.config.rollout.get("layered_summon", False),
             )
             log_gpu_memory_usage("After building sharding manager", logger=logger)
-        elif rollout_name == "vllm-tool":
-            from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd_tool import vLLMToolRollout
+        elif rollout_name == "vllm-agent":
+            from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd_agent import vLLMAgentRollout
             from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
 
             log_gpu_memory_usage(f"Before building {rollout_name} rollout", logger=logger)
@@ -531,12 +531,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             from verl.workers.rollout.vllm_rollout import vLLMAsyncRollout
 
             if self.config.rollout.mode == "sync":
-                vllm_rollout_cls = vLLMToolRollout 
+                vllm_rollout_cls = vLLMAgentRollout 
             else:
                 raise ValueError("Vllm-tool rollout does not supports async mode")
             
             # tool-config path for agent verifier
-            tool_config_path = self.config.extra.tool_config_path
+            agent_config_path = self.config.extra.agent_config_path
             
             rollout = vllm_rollout_cls(
                 model_path=local_path,
@@ -545,7 +545,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 model_hf_config=self.actor_model_config,
                 device_mesh=rollout_device_mesh,
                 trust_remote_code=trust_remote_code,
-                tool_config_path=tool_config_path,
+                agent_config_path=agent_config_path,
                 **lora_kwargs,
             )
 

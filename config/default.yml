@@ -18,6 +18,7 @@ backend:                                # 推理后端与采样参数
     tensor_parallel_size: 1             # 张量并行大小（=GPU 数或其因数）
     stop_tokens:
       - "</answer>"
+    use_tqdm: true
   openai:                               # OpenAI/兼容接口配置（仅在使用 OpenAI 风格后端时生效）
     api_key: "sk-xxx"                   # API Key（务必用环境变量或密钥管理）
     url: ""                             # 自定义 Base URL（如走兼容网关时设置；官方可留空）

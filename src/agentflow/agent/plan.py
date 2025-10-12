@@ -16,7 +16,7 @@ from agentflow.tools.caller import ToolCaller
 from agentflow.tools.base import ToolParser      
 from agentflow.agent.planner.llm_planner import LLMPlanner
 from agentflow.agent.executor.executor import VerificationSubtaskExecutor, simple_aggregate_verdict, ExecutorConfig
-from agentflow.agent.executor.integrator import integrate_and_predict, stats_and_has_fail, build_rollout_for_model
+from agentflow.agent.executor.integrator import integrate_and_predict, stats_and_has_fail, build_rollout_for_model, point_wise_score
 from agentflow.utils.chat_template import is_chat_messages   
 from agentflow.utils.log_util import get_logger
 
@@ -41,11 +41,33 @@ Output format:
 - Lowercase only. No extra text, no explanations, no quotes, no code fences.
 """
 
+
+POINTWISE_SYSTEM_PROMPT = """
+You are a strict judge for a verification rollout. 
+
+## TASK
+
+You will receive the full rollout (plan / subtasks / audit / answer) and must assign:
+a **score** from 0 to 10 (integer or one decimal), reflecting your confidence / quality in the reasoning and result. 
+* 0 means totally incorrect / many flaws; 
+* 10 means perfect, no doubts, rigorous, chain is fully justified.  
+
+## RULE
+
+* Begin with a <reasoning></reasoning> block with your detailed analysis for the given task.
+* Finally put your score exactly in a <answer></answer> block.
+* Your scoring must consider both **process** (correctness / consistency of subtask chain, no hidden leaps, domain checks, edge cases) and **outcome** (final answer correctness, matching type/range).  
+
+
+
+"""
 USER_PROMPT="""
-Full Agent rollout: 
+The question, answer and agent's rollout:
 {sequence}
 
 """
+
+
 
 class PlanSubtaskAgent(CanRMScores):
     
@@ -66,7 +88,7 @@ class PlanSubtaskAgent(CanRMScores):
         self.executor = VerificationSubtaskExecutor(
             backend=backend,
             registry=registry,
-            config=ExecutorConfig(enable_early_stop=True)
+            config=ExecutorConfig(enable_early_stop=False)
         )
         self.scorer = BoolLogitsGenerativeScorer(
             generator=backend,
@@ -74,6 +96,8 @@ class PlanSubtaskAgent(CanRMScores):
             system_prompt=final_system_prompt or SYSTEM_PROMPT,
             user_prompt=final_user_prompt or USER_PROMPT,
         )
+        
+        self.agent = self.executor.agent
         
     
     def score(
@@ -107,7 +131,89 @@ class PlanSubtaskAgent(CanRMScores):
             traceback.print_exc()
             return scores, metas
         
+
+class PlanSubtaskMultiheadAgent(CanRMScores):
+    
+    def __init__(
+        self,
+        backend: CanGenerate,
+        prob_calculator: CanChoiceProbs,
+        tool_registry: Optional[ToolRegistry] = None,
+        final_system_prompt: Optional[str] = None,
+        final_user_prompt: Optional[str] = None,
+    ):
+        super().__init__()
+        self.backend = backend
+        self.planner = LLMPlanner(backend)
+        registry = tool_registry or ToolRegistry()
+        py_tool = PythonExecutionTool()
+        registry.register(py_tool)
+        self.executor = VerificationSubtaskExecutor(
+            backend=backend,
+            registry=registry,
+            config=ExecutorConfig(enable_early_stop=False)
+        )
+        self.scorer = BoolLogitsGenerativeScorer(
+            generator=backend,
+            prob_calculator=prob_calculator,
+            system_prompt=final_system_prompt or SYSTEM_PROMPT,
+            user_prompt=final_user_prompt or USER_PROMPT,
+        )
         
+        self.agent = self.executor.agent
+        
+    
+    def score(
+        self, 
+        sequences: Sequence[str], 
+        extra: List[Dict] = None, 
+        **kwargs
+    ) -> Tuple[List[float],List[Dict]]: 
+        try:
+            plans = self.planner.plan(sequences)
+            reports = self.executor.execute(sequences=sequences,plans=plans)
+            results = integrate_and_predict(
+                sequences=sequences,
+                plans=plans,
+                reports=reports,
+                scorer=self.scorer,
+            )
+            
+            pointwise_scores, pointwise_metas = point_wise_score(
+                sequences=sequences,
+                plans=plans,
+                reports=reports,
+                backend=self.backend,
+            )
+            
+            scores = [0] * len(sequences)
+            metas = [{} for _ in range(len(sequences))] 
+            
+            
+            def _clip(num: float):
+                clipped = num
+                if num > 10:
+                    clipped = 10
+                elif num < 0:
+                    clipped = 0
+                return clipped / 10
+
+            
+            for idx, (result, ps, pm) in enumerate(zip(results, pointwise_scores, pointwise_metas)):
+                scores[idx]=(result.score + _clip(ps)) / 2
+                # metas[idx]["raw_text"]=result.rollout_text
+                metas[idx]["plan"]=plans[idx]
+                metas[idx]["subtask_reports"]=reports[idx]
+                metas[idx]["final_result"]=result
+                metas[idx]["judge"]=result.verdict
+                metas[idx]["pointwise_meta"]=pm
+            return scores, metas
+        except Exception as e:
+            scores = [-1] * len(sequences)
+            metas = [{"raw_text":"","judge":None} for _ in range(len(sequences))] 
+            traceback.print_exc()
+            return scores, metas
+
         
 class RulePlanSubtaskAgent(CanRMScores):
     """直接根据规则得到正确率以及分数

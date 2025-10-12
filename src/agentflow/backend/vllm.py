@@ -38,6 +38,7 @@ class VllmBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate):
         )
         
         self.tokenizer = self.engine.get_tokenizer()
+        self.use_tqdm = self.vllm_config.get("use_tqdm",True)
     
     
     def apply_chat_template(self, messages: List[List[Dict[str,str]]], 
@@ -80,6 +81,7 @@ class VllmBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate):
         results = self.engine.generate(
             prompts=prompts,
             sampling_params=self.sampling_params,
+            use_tqdm=self.use_tqdm,
         )
         texts = [result.outputs[0].text for result in results]
         return texts, [{"raw_output": result, "prompt":prompt} for result, prompt in zip(results, prompts)]
@@ -119,6 +121,7 @@ class VllmInjectionBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTe
         self._parse_config()
         
         self.tokenizer = self.engine.get_tokenizer()
+        self.use_tqdm = self.vllm_config.get("use_tqdm",True)
     
     
     def apply_chat_template(self, messages: List[List[Dict[str,str]]], 
@@ -155,20 +158,21 @@ class VllmInjectionBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTe
             max_prompt_len = max(max_prompt_len, 128)
             for i in range(len(prompts)):
                 prompts[i]=left_truncate_text_by_token(self.tokenizer, str(prompts[i]), max_prompt_len)
-                
+    
             
         
         results = self.engine.generate(
             prompts=prompts,
             sampling_params=self.sampling_params,
+            use_tqdm=self.use_tqdm,
         )
         texts = [result.outputs[0].text for result in results]
         return texts, [{"raw_output": result, "prompt":prompt} for result, prompt in zip(results, prompts)]
     
     def _parse_config(self):
-        backend_config = {}
-        sampling_config = {}
-        vllm_config = {}
+        backend_config = self.config["backend"]
+        sampling_config = backend_config["sampling"]
+        vllm_config = backend_config["vllm"]
         self.backend_name = "vllm"
         self.backend_config = backend_config
         self.sampling_config = sampling_config

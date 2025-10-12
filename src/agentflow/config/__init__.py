@@ -24,7 +24,8 @@ sampling_config = {
 vllm_config={
     "gpu_memory_utilization":0.8,
     "tensor_parallel_size":1,
-    "stop_tokens":[]
+    "stop_tokens":[],
+    "use_tqdm":True,
 }
 
 openai_config={
