@@ -8,16 +8,15 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from agentflow.utils.log_util import get_logger
-from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin
+from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin, left_truncate_text_by_token, resolve_context_window_len
 from agentflow.core.interfaces import CanGenerate, CanChoiceProbs,SupportChatTemplate
 
-class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,ChatTemplateDefaultsMixin):
+class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceProbs,SupportChatTemplate):
     """A Vllm backend for both text generation and prob calculation
     The class will both load vllm LLM object and transformers model, please make sure there are enough gpu memory.
     """
     def __init__(self, config: Dict[str, Any], logger: Logger | None = None, **kwargs):
         super().__init__()
-        ChatTemplateDefaultsMixin.__init__(self)
         self.config = config
         self.logger = logger or get_logger(config, __name__)
         self._parse_config()
@@ -28,6 +27,7 @@ class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,Ch
             top_p=self.sampling_config.get("top_p", 1.0),
             top_k=self.sampling_config.get("top_k", 50),
             stop=self.vllm_config.get("stop_tokens", []),
+            repetition_penalty=self.vllm_config.get("repetition_penalty",1.0),
             include_stop_str_in_output=True,
         )
         self.vllm = LLM(
@@ -44,20 +44,24 @@ class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,Ch
         self.lm  = AutoModelForCausalLM.from_pretrained(
             self.backend_config["model_path"],
             torch_dtype=("auto" if torch_dtype=="auto" else torch_dtype),
-            trust_remote_code=True
-        ).to(self.hf_config.get("device", "cuda")).eval()
+            trust_remote_code=True,
+            device_map="auto",
+        ).eval()
+        self.use_tqdm = self.vllm_config.get("use_tqdm",True)
 
 
-    def apply_chat_template(self, messages: List[Dict[str,str]], 
+    def apply_chat_template(self, messages: List[List[Dict[str,str]]], 
                             tokenize=False, 
                             add_generation_prompt=True, 
                             **additional_params) -> Union[str,Any]:
-        merged = {**self._chat_template_defaults, **additional_params}
+        merged = self._merge_for_call(additional_params)
         result, _ = safe_apply_chat_template(
             self.tokenizer,
             messages=messages,
             tokenize = tokenize,
             add_generation_prompt = add_generation_prompt,
+            explicit_max_model_len=resolve_context_window_len(self.vllm, self.tokenizer),
+            generation_max_new_tokens=self.sampling_config.get("max_tokens",1024),
             **merged
         )
 
@@ -89,16 +93,22 @@ class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,Ch
 
         if is_chat_messages(prompts):
             prompts = self.apply_chat_template(prompts)
+        else:
+            max_prompt_len = resolve_context_window_len(self.vllm, self.tokenizer) - self.sampling_config.get("max_tokens",1024) - 32
+            max_prompt_len = max(max_prompt_len, 128)
+            for i in range(len(prompts)):
+                prompts[i]=left_truncate_text_by_token(self.tokenizer, str(prompts[i]), max_prompt_len)
+            
         
-        results = self.vllm.generate(prompts=prompts, sampling_params=self.sampling_params)
+        results = self.vllm.generate(prompts=prompts, sampling_params=self.sampling_params,use_tqdm=self.use_tqdm,)
         texts = [r.outputs[0].text if r.outputs else "" for r in results]
-        metas = [{"raw_output": r} for r in results]
+        metas = [{"raw_output": r, "prompt":prompt} for r, prompt in zip(results, prompts)]
         return texts, metas
 
 
     
     
-    @torch.no_grad()
+    @torch.inference_mode()
     def choice_probs(self,
                     prefixes: Sequence[str],
                     choices: Sequence[Sequence[str]],
@@ -110,7 +120,6 @@ class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,Ch
         all_group_probs: List[List[float]] = []
         for prefix, choice_list in zip(prefixes, choices):
             prefix_ids = self.tokenizer(prefix, add_special_tokens=False).input_ids
-
            
             input_id_batches = []
             label_batches = []
@@ -145,15 +154,19 @@ class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,Ch
 
             outputs = self.lm(input_ids=input_ids_tensor,
                                         attention_mask=attention_mask_tensor,
-                                        labels=labels_tensor)
+                                        labels=labels_tensor,
+                                        )
 
             valid_counts = (labels_tensor != -100).sum(dim=1).to(torch.float32) 
             valid_counts = torch.clamp(valid_counts, min=1.0)
 
             avg_nll = outputs.loss  
-            with torch.no_grad():
-                logits = self.lm(input_ids=input_ids_tensor,
-                                            attention_mask=attention_mask_tensor).logits  
+
+            with torch.inference_mode():
+                # logits = self.lm(input_ids=input_ids_tensor,
+                #                             attention_mask=attention_mask_tensor,
+                #                             use_cache=False).logits  
+                logits = outputs.logits 
                 log_probs = torch.log_softmax(logits[:, :-1, :], dim=-1)  
                 shifted_labels = labels_tensor[:, 1:].clone()
                 mask = shifted_labels != -100  
@@ -170,6 +183,10 @@ class VllmChoiceLogitsBackend(CanGenerate, CanChoiceProbs,SupportChatTemplate,Ch
 
             probs = torch.softmax(total_logprob_per_sample, dim=0)  
             all_group_probs.append(probs.detach().cpu().tolist())
+            del outputs, shifted_labels, mask,token_log_probs,total_logprob_per_sample
+            del input_ids_tensor, labels_tensor, attention_mask_tensor
+            torch.cuda.empty_cache()
+
 
         return all_group_probs
     

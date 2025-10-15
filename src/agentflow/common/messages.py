@@ -39,7 +39,7 @@ class Message:
     
 def trans_messages_to_standard(
     messages: List['Message'], 
-    tool_role_to_map: Literal["tool","assistant"]="tool"
+    tool_role_to_map: Literal["tool","assistant"]="assistant"
 ) -> List[Dict[str,str]]:
     """Convert a list of Message objects to standard chat messages
 

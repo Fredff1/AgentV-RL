@@ -18,12 +18,14 @@ sampling_config = {
     "max_tokens":1024,
     "top_p":1.0,
     "top_k":20,
+    "repetition_penalty":1.0,
 }
 
 vllm_config={
     "gpu_memory_utilization":0.8,
     "tensor_parallel_size":1,
-    "stop_tokens":[]
+    "stop_tokens":[],
+    "use_tqdm":True,
 }
 
 openai_config={

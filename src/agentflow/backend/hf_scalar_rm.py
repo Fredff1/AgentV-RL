@@ -6,10 +6,10 @@ from transformers import AutoTokenizer, AutoModel
 
 from agentflow.utils.log_util import get_logger
 from agentflow.core.interfaces import SupportChatTemplate, CanRMScores
-from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin
+from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin, left_truncate_text_by_token, resolve_context_window_len
 
 
-class HFRMBackend(SupportChatTemplate,CanRMScores,ChatTemplateDefaultsMixin):
+class HFRMBackend(ChatTemplateDefaultsMixin, SupportChatTemplate,CanRMScores):
 
     def __init__(self, config: Dict[str, Any], logger: Optional[Logger] = None):
         super().__init__()
@@ -60,12 +60,14 @@ class HFRMBackend(SupportChatTemplate,CanRMScores,ChatTemplateDefaultsMixin):
                             tokenize=False, 
                             add_generation_prompt=True, 
                             **additional_params) -> Union[str,Any]:
-        merged = {**self._chat_template_defaults, **additional_params}
+        merged = self._merge_for_call(additional_params)
         result, _ = safe_apply_chat_template(
             self.tokenizer,
             messages=messages,
             tokenize = tokenize,
             add_generation_prompt = add_generation_prompt,
+            explicit_max_model_len=resolve_context_window_len(self.model,self.tokenizer),
+            generation_max_new_tokens=32,
             **merged
         )
 

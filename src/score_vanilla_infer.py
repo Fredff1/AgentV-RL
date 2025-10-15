@@ -9,45 +9,46 @@ from typing import List, Dict, Any, Optional
 from agentflow.config import load_config
 from agentflow.utils.json_util import JsonUtil
 from agentflow.utils.tag_util import find_tags
+from agentflow.utils.log_util import log_config, get_logger, print_args
 
 from agentflow.backend.vllm_logits import VllmChoiceLogitsBackend
 from agentflow.inference.scorers.generative_scorer import BoolLogitsGenerativeScorer
 
 SYSTEM_PROMPT="""
-You are a math verifier with NO tool calls.
+You are a teacher. Your task is to grade the solution, verifying correctness. Use Expected Answer to find any erroneous step in the Solution.
 
 ## GOAL
-Given a chat-like SEQUENCE containing a math QUESTION and an ASSISTANT'S REASONING (and possibly a final answer), you must:
-1) write a concise verification text that inspects the given reasoning step-by-step (do not re-solve unless a single local derivation is trivially needed);
-2) decide whether the reasoning correctly solves the QUESTION;
+Given a problem and a solution, you must:
+1) write a concise verification text that inspects the given solution step-by-step (do not re-solve unless a single local derivation is trivially needed);
+2) decide whether the solution correctly solves the problem;
 3) output a boolean verdict.
 
-You must prioritize checking the original reasoning via minimal paper checks: legality of algebraic steps, substitution mentally for proposed roots, domain and edge cases, theorem prerequisites, and consistency of the final statement with intermediate steps. Do NOT produce a fresh full solution when the provided reasoning is wrong or incomplete.
+You must prioritize checking the original soluiton via paper checks: legality of algebraic steps, substitution mentally for proposed roots, domain and edge cases, theorem prerequisites, and consistency of the final statement with intermediate steps. Do NOT produce a fresh full solution when the provided reasoning is wrong or incomplete.
 
 ## ALLOWED TAGS
-• <rubric> … </rubric>  – required at the start; list 2–4 decisive axes you’ll check.
-• <think> … </think>    – private reasoning exactly once; each update must add evidence or tighten the verdict (state micro-goal, the two most decisive axes, a compact known/unknown ledger, then choose the smallest next step: conclude or one precise mental check).
-• <verify> … </verify>  – public verification text (≈60–160 words or 5–10 bullets), focused on checking the given reasoning.
-• <answer> … </answer>  – final boolean verdict (true/false) exactly once.
-
-## INTERACTION RULES
-1) Every assistant message must start with a <rubric> block.
-2) The session contains exactly one <think>.
-3) After </think>, immediately output <verify> then <answer> in the same message. No tools, no extra text outside tags.
-4) Keep checks local to the provided steps; avoid lengthy recomputation. If a critical step cannot be justified by simple inspection, treat it as a failure.
-
+* <rubric> … </rubric>  – required at the start; list 2–4 decisive axes you’ll check.
+* <think> … </think>    – private reasoning exactly once; each update must add evidence or tighten the verdict (state micro-goal, the two most decisive axes, a compact known/unknown ledger, then choose the smallest next step: conclude or one precise mental check).
+* <verify> … </verify>  – public verification text (≈60–160 words or 5–10 bullets), focused on checking the given reasoning.
+* <answer> … </answer>  – final boolean verdict (true/false) exactly once.
 """
 
 USER_PROMPT="""
-The sequence for judge:
 {sequence}
 
-Your judgement:
+### Verification Task Reminder ###
 - Start with <rubric>…</rubric>.
-- Include exactly one <think>…</think>.
-- Output:
+- Include exactly <think>…</think>.
+- Then verify the solution step by step and output the final verdict:
   <verify>…</verify>
   <answer>true|false</answer>
+"""
+
+DEFAULT_SEQ_TEMPLATE="""
+### Problem ###
+{problem}
+
+### Solution ###
+{solution}
 """
 
 def ensure_parent_dir(path: str):
@@ -88,14 +89,16 @@ def build_sequences_for_block(
 ) -> List[str]:
     """
     把一条记录 (含 prompt 与 samples[*]) 转为若干 judge 'sequence' 文本：
-    默认格式： "User: {prompt}\nAssistant: {response}"
+    默认格式： "User: {problem}\nAssistant: {solution}"
     """
     prompt_text = block.get("question", "")
     samples = block.get("samples", []) or []
     seqs: List[str] = []
     for samp in samples:
         resp = to_text(samp)
-        seq = join_template.format(prompt=prompt_text, response=resp)
+        seq = join_template.format(problem=prompt_text, solution=resp)
+        if len(seq) > 20000:
+            seq = seq[(len(seq)-20000):]
         seqs.append(seq)
     return seqs
 
@@ -188,11 +191,14 @@ def score_streaming(
     judge_system_path: Optional[str],
     judge_user_path: Optional[str],
     max_records: Optional[int],
+    start_idx: int = 0,
 ):
     ensure_parent_dir(output_path)
 
     # 1) 初始化后端（同时可用于生成与 choice_probs）
     config = load_config(config_path)
+    logger = get_logger(config,__name__)
+    log_config(logger,config)
     backend = VllmChoiceLogitsBackend(config)
 
     # 2) 读取 judge 模板；若未提供则用 BoolLogitsGenerativeScorer 默认
@@ -223,7 +229,9 @@ def score_streaming(
     batch_sequences_per_block: List[List[str]] = []
     total = 0
 
-    for _, block in read_jsonl_stream(input_path, max_records=max_records):
+    for idx, block in read_jsonl_stream(input_path, max_records=max_records):
+        if idx < start_idx:
+            continue
         seqs = build_sequences_for_block(block, join_template=join_template)
         batch_blocks.append(block)
         batch_sequences_per_block.append(seqs)
@@ -261,16 +269,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output", required=True, type=str, help="Output JSONL with scores")
     p.add_argument("--record-batch-size", type=int, default=16, help="How many records per scoring batch")
     p.add_argument("--append", action="store_true", help="Append to output instead of overwrite")
-    p.add_argument("--join-template", type=str, default="User: {prompt}\nAssistant: {response}",
+    p.add_argument("--join-template", type=str, default=DEFAULT_SEQ_TEMPLATE,
                    help="How to form judge 'sequence' from prompt + response")
     p.add_argument("--judge-system-file", type=str, default=None, help="Optional system prompt file for the judge")
     p.add_argument("--judge-user-file", type=str, default=None, help="Optional user prompt file for the judge")
     p.add_argument("--max-records", type=int, default=None, help="Only process first N records")
+    p.add_argument("--start_idx",type=int,default=0,help="Start idx of records")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    print_args(args)
     score_streaming(
         config_path=args.config,
         input_path=args.input,
@@ -281,6 +291,7 @@ def main():
         judge_system_path=args.judge_system_file,
         judge_user_path=args.judge_user_file,
         max_records=args.max_records,
+        start_idx=args.start_idx,
     )
 
 

@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 
 from agentflow.config import load_config
 from agentflow.utils.json_util import JsonUtil
+from agentflow.utils.log_util import log_config, get_logger, print_args
 
 from agentflow.backend.vllm_logits import VllmChoiceLogitsBackend
 from agentflow.agent.summary.simple import GeneratorSummarizer
@@ -22,38 +23,37 @@ from agentflow.inference.scorers.generative_scorer import BoolLogitsGenerativeSc
 from agentflow.utils.tag_util import find_tags
 
 SYSTEM_PROMPT_TOOL="""
-You are a tool‑augmented reasoning expert to evaludate other assistents' answers towards specific questions.
+You are a teacher. Your task is to grade the solution, verifying correctness. Use Expected Answer to find any erroneous step in the Solution.
 
 ## GOAL
-Given a requirment, a question, two assistants' answres with one correct and the other one wrong.Think step‑by‑step,
-call tools when needed to distinguish which answer is correct, and finally output <answer>true</answer> or <answer>false</answer>.
+Given a problem and a solution, you must:
+1) write a concise verification text that inspects the given solution step-by-step (do not re-solve unless a single local derivation is trivially needed);
+2) decide whether the solution correctly solves the problem;
+3) output a boolean verdict.
+
+You must prioritize checking the original soluiton via paper checks: legality of algebraic steps, substitution mentally for proposed roots, domain and edge cases, theorem prerequisites, and consistency of the final statement with intermediate steps. Do NOT produce a fresh full solution when the provided reasoning is wrong or incomplete.
+
+You may perform **multi-turn reasoning**. In each round:
+- Always start with <rubric>…</rubric> (once at the very beginning).
+- Then include exactly one <think>…</think>, with your private reasoning (state micro-goal, decisive axes, known/unknown, next step).
+- After <think>, you must choose one action:
+  - **Tool-call**: 
+    - <python>…</python> with safe left-aligned code using only print(...) (numpy, sympy, math pre-imported).
+    - <search>…</search> with a short, precise web query string (one query).
+  - **Final answer**: output <verify>…</verify> (concise inspection text) and <answer>true|false</answer> (exactly once, session ends).
 
 ## ALLOWED TAGS
-• <think> … </think>  – private reasoning 
-  * In every <think>, restate the current micro-goal and the two most decisive rubric axes, update a compact ledger of knowns/unknowns/assumptions, then pick the smallest next step—either finalize a verdict (one-sentence reason) or propose one precise check.
-  * If new evidence just arrived, integrate only probative facts, note any conflicts and which side better fits the rubric, then decide again whether to conclude or run one minimal check.
-  * Progress rule: avoid repetition—each <think> must either add new evidence or tighten the verdict.
-• <rubric> … </rubric>  – evaluation criteria block; appears at most once 
-• <search> … </search> – web search query 
-  * single precise query only
-  * trigger ONLY if the fact is time-sensitive/non-trivial
-  * SKIP if answerable from provided context, common knowledge, or computable
-  * prefer to use structure as "[entity/topic] [specific claim/number] [constraint: time/domain]"
-  * avoid vague verbs like “verify/is it true” and direct url in queries;avoid duplicate queies.
-• <python> … </python> – Python code block 
-  * Code rules: left‑aligned; use print(...); no input(...), os.system(...), or infinite loops.  
-  * numpy as np, sympy and math are pre-imported and available. Other than the three above, you may manually import **standard library only**
-  * <python> is never for textual fact-checks, only real calculations.
-• <answer> … </answer> – final answer (exactly once per session)
+* <rubric> … </rubric> – required once at the very beginning, list 2–4 decisive axes you’ll check.
+* <think> … </think> – required exactly once per round; state reasoning progress.
+* <python> … </python> – optional, can be used at most three times across rounds, but only one per round. Left-aligned code, safe subset.
+* <search> … </search> – optional, can be used once across rounds;keep query short and precise.
+* <verify> … </verify> – required in the final round only, ≈60–160 words or 5–10 bullets.
+* <answer> … </answer> – required in the final round only, exactly once.
 
-## INTERACTION RULES
-1. Every assistant message **must** start with a <rubric> block.
-2. Each session should only contain one <think> tag
-3. In each round,after the <think> block, output is **either**  
-   a) one tool tag (<search> or <python>) **and nothing else** 
-   b) the final <answer> tag. 
-4. Each tool type can be used **at most three times** per session.  
-5. **NEVER** output incomplete tags to avoid format exceptions.
+### Important
+- Do NOT fully re-solve the problem when the given reasoning is wrong; focus on checking legality of steps.
+- Do NOT output <verify>/<answer> in the same round as <python> or <search>.
+- The dialogue ends once you give <verify> and <answer>.
 """
 
 
@@ -62,15 +62,28 @@ call tools when needed to distinguish which answer is correct, and finally outpu
 USER_PROMPT="""
 {sequence}
 
-Your judgement:
+### Verification Task Reminder ###
 - Start with <rubric>…</rubric>.
 - Include exactly one <think>…</think>.
-- If you need a calculation to verify a step, after </think> output ONLY one <python>…</python> block (and nothing else) in this round.
-- Otherwise (or after the tool round), output:
-  <verify>…</verify>
-  <answer>true|false</answer>
+- After <think>, you must choose:
+  - Call tool:
+    - <python>…</python> (safe, left-aligned code using print(...); numpy, sympy, math already imported).
+    - <search>…</search> (one short, precise web query).
+  - Or finalize: 
+    <verify>…</verify>
+    <answer>true|false</answer>
+- Do not output <verify>/<answer> in the same round as <python> or <search>.
+- End only when <verify> and <answer> are given.
+
 """
 
+DEFAULT_SEQ_TEMPLATE="""
+### Problem ###
+{problem}
+
+### Solution ###
+{solution}
+"""
 
 def ensure_parent_dir(path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -110,14 +123,16 @@ def build_sequences_for_block(
 ) -> List[str]:
     """
     把一条记录 (含 prompt 与 samples[*]) 转为若干 judge 'sequence' 文本：
-    默认格式： "User: {prompt}\nAssistant: {response}"
+    默认格式： "User: {problem}\nAssistant: {solution}"
     """
     prompt_text = block.get("question", "")
     samples = block.get("samples", []) or []
     seqs: List[str] = []
     for samp in samples:
         resp = to_text(samp)
-        seq = join_template.format(prompt=prompt_text, response=resp)
+        seq = join_template.format(problem=prompt_text, solution=resp)
+        if len(seq) > 20000:
+            seq = seq[(len(seq)-20000):]
         seqs.append(seq)
     return seqs
 
@@ -144,8 +159,9 @@ def flush_batch_and_write(
 
     # 2) 打分
     scores: List[float] = []
+    extras = [{"mission":seq} for seq in flat_sequences]
     if flat_sequences:
-        scores, metas = scorer.score(flat_sequences)
+        scores, metas = scorer.score(flat_sequences,extras)
 
     # 3) 回切并写出
     offset = 0
@@ -213,17 +229,42 @@ def score_streaming(
     judge_user_path: Optional[str],
     max_records: Optional[int],
     include_full_meta: bool,
+    start_idx: int = 0,
 ):
     ensure_parent_dir(output_path)
 
     # 1) 初始化后端（同时可用于生成与 choice_probs）
     config = load_config(config_path)
+    logger = get_logger(config, __name__)
+    log_config(logger,__name__)
     backend = VllmChoiceLogitsBackend(config)
     registry = ToolRegistry()
-    def _get_prompt(content: str):
-        return f"{content}"
+
     summarizer = GeneratorSummarizer(
-        generator=backend, prompt_template_fn=_get_prompt,
+        generator=backend, prompt_template="""
+You are a summarizer specialized in processing web search results.  
+Your role is to extract and organize information that may help a verifier check whether a given answer to a specific question is correct.  
+
+Given qeestion and answer: 
+
+{mission}  
+
+Instructions:
+- Do NOT attempt to directly solve or answer the mission yourself.  
+- Only summarize or highlight relevant facts, definitions, formulas, examples, or reasoning patterns from the search results that could be useful for verification.  
+- If the search results contain conflicting information, point out the differences clearly.  
+- Be concise, neutral, and faithful to the source texts.  
+- Your output should serve as supporting evidence for a separate verifier, not as a final judgment.  
+
+Output format:
+- **Key Facts:** bullet points of extracted facts
+- **Potential Conflicts or Variations:** (if any)
+- **Useful References:** (optional, if sources mention notable names, theorems, datasets, etc.)
+
+Raw search results:
+{content}
+
+"""
     )
     search_tool = AsyncSearchTool(SearxngBackend("http://127.0.0.1:8888"),enable_summarize=True,summarize_engine=summarizer)
     py_tool = PythonExecutionTool()
@@ -244,11 +285,19 @@ import sympy
         if tags:
             return True
         return False
+    
+    def _error_gen(context: AgentContext):
+        msg = context.last_message()
+        tags = find_tags(msg.content,["answer","python","next"])
+        if tags:
+            return False
+        return True
     agent = ToolDrivenAgent(
         backend=backend,
         tool_caller=caller,
         finish_fn=_finish_gen,
         max_rounds=12,
+        error_fn=_error_gen,
     )
 
     # 2) 读取 judge 模板；若未提供则用 BoolLogitsGenerativeScorer 默认
@@ -279,7 +328,9 @@ import sympy
     batch_sequences_per_block: List[List[str]] = []
     total = 0
 
-    for _, block in read_jsonl_stream(input_path, max_records=max_records):
+    for idx, block in read_jsonl_stream(input_path, max_records=max_records):
+        if idx < start_idx:
+            continue
         seqs = build_sequences_for_block(block, join_template=join_template)
         batch_blocks.append(block)
         batch_sequences_per_block.append(seqs)
@@ -319,17 +370,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output", required=True, type=str, help="Output JSONL with scores")
     p.add_argument("--record-batch-size", type=int, default=16, help="How many records per scoring batch")
     p.add_argument("--append", action="store_true", help="Append to output instead of overwrite")
-    p.add_argument("--join-template", type=str, default="User: {prompt}\nAssistant: {response}",
+    p.add_argument("--join-template", type=str, default=DEFAULT_SEQ_TEMPLATE,
                    help="How to form judge 'sequence' from prompt + response")
     p.add_argument("--judge-system-file", type=str, default=None, help="Optional system prompt file for the judge")
     p.add_argument("--judge-user-file", type=str, default=None, help="Optional user prompt file for the judge")
     p.add_argument("--max-records", type=int, default=None, help="Only process first N records")
     p.add_argument("--include_full_meta", action="store_true", help="Write all inference meta to result")
+    p.add_argument("--start_idx",type=int,default=0,help="Start idx of records")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    print_args(args)
     score_streaming(
         config_path=args.config,
         input_path=args.input,
@@ -341,6 +394,7 @@ def main():
         judge_user_path=args.judge_user_file,
         max_records=args.max_records,
         include_full_meta=args.include_full_meta,
+        start_idx=args.start_idx,
     )
 
 

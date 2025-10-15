@@ -62,20 +62,21 @@ class ToolDrivenAgent(CanGenerate):
         
         final_texts = ["" for _ in range(prompt_len)]
         finished = [False] * prompt_len
-        metas: List[Dict] = [{"steps": [], "context":contexts[i]} for i in range(prompt_len)]
+        metas: List[Dict] = [{"context":contexts[i]} for i in range(prompt_len)]
         for round in range(self.max_rounds):
             active = [i for i in range(prompt_len) if not finished[i]]
-            
             if not active:
                 break
             
             batch_inputs = [trans_messages_to_standard(contexts[i].all_messages()) for i in active]
             batch_extra = [contexts[i].meta for i in active]
-            texts, backend_metas = self.backend.generate(batch_inputs, extra=batch_extra, **kwargs)
+            try:
+                texts, backend_metas = self.backend.generate(batch_inputs, extra=batch_extra, **kwargs)
+            except:
+                break
             
             for j, i in enumerate(active):
                 contexts[i].step_index = round
-                metas[i]["steps"].append({"assistant_text": texts[j], "backend_meta": backend_metas[j]})
                 contexts[i].append_assistant(texts[j])
                 
             calls_per_text = self.tool_parser.parse_batch(texts, backend_metas)
@@ -98,20 +99,21 @@ class ToolDrivenAgent(CanGenerate):
                 if all(finished):
                     break
                 continue
+            
 
             for j in to_call_local_indices:
                 i = active[j]
                 contexts[i].meta.setdefault("round_counter", {})
                 contexts[i].meta["round_counter"].update(contexts[i].round_counters)
 
+
             sub_texts = [texts[j] for j in to_call_local_indices]
-            sub_metas = [backend_metas[j] for j in to_call_local_indices]  
+            sub_metas = [batch_extra[j] for j in to_call_local_indices]  
             batch_results_sub: List[List[ToolCallResult]] = self.tool_caller.call_batch(sub_texts, sub_metas)
 
             for k, j in enumerate(to_call_local_indices):
                 i = active[j]
                 results = batch_results_sub[k]
-                metas[i]["steps"][-1]["tool_results"] = results
                 for r in results:
                     contexts[i].update_round_counter(r)
                     obs_text = self.tool_parser.make_result_str(r)
@@ -120,6 +122,7 @@ class ToolDrivenAgent(CanGenerate):
         for i in range(prompt_len):
             assistant_messages = contexts[i].all_round_messages()
             final_texts[i] = trans_messages_to_text(assistant_messages)
-
+        metas: List[Dict] = [{} for i in range(prompt_len)]
         return final_texts, metas
+            
             
