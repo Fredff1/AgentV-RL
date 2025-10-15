@@ -115,8 +115,8 @@ Verify the following question and answer:
 INPUT_PATHS=[
     "/root/workspace/agent-rm/datasets/polaris/sft-1001/polaris-qwen2.5-7b-idx0-1000-exp3-integration-filtered.jsonl",
 ]
-OUTPUT_DIR="/root/workspace/agent-rm/datasets/polaris/sft-1001/processed/"
-OUTPUT_NAME="sft_1001-full"
+OUTPUT_DIR="/root/workspace/agent-rm/datasets/polaris/sft1013"
+OUTPUT_NAME="sft_1013-full"
     
 if __name__ == "__main__":
     out_data = []
@@ -126,8 +126,7 @@ if __name__ == "__main__":
         
         for block in data:
             eva =  block["evaluation"]
-            if eva.get("correct",True) is True:
-              continue 
+
             seq = block["sequence"]
             rollout = block["rollout"]
             messages = [

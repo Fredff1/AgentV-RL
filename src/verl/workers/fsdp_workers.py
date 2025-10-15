@@ -245,7 +245,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         torch_dtype = fsdp_config.get("model_dtype", None)
         if torch_dtype is None:
-            torch_dtype = torch.float32 if self._is_actor else torch.bfloat16
+            torch_dtype = torch.bfloat16 if self._is_actor else torch.bfloat16
         else:
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 

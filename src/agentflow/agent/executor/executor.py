@@ -26,6 +26,7 @@ class ExecutorConfig:
     helper_modules: List[str] = field(default_factory=list)
     enable_early_stop: bool = False
     use_tqdm: bool = False
+    save_full_meta: bool = True
 
 
 
@@ -136,7 +137,11 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
             for idx, (plan_idx, answer, meta) in enumerate(zip(input_msg_indicies,answers,metas)):
                 curr_plan = subtasks_per_plan[plan_idx]
                 curr_subtask = curr_plan[sub_task_idx]
-                curr_agent_context: AgentContext = meta["context"]
+                curr_agent_context: AgentContext = meta.get("context",AgentContext())
+                
+                if self.config.save_full_meta == False:
+                    curr_agent_context.meta.clear()
+                    curr_agent_context.tool_results.clear()
                 
                 answer_tags = find_tags(answer, ["answer"])
                 if not answer_tags:

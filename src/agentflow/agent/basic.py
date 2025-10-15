@@ -122,7 +122,7 @@ class ToolDrivenAgent(CanGenerate):
         for i in range(prompt_len):
             assistant_messages = contexts[i].all_round_messages()
             final_texts[i] = trans_messages_to_text(assistant_messages)
-
+        metas: List[Dict] = [{} for i in range(prompt_len)]
         return final_texts, metas
             
             

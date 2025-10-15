@@ -61,6 +61,8 @@ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seql
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 
+from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd_agent import vLLMAgentWrapper
+
 WorkerType = type[Worker]
 
 
@@ -380,10 +382,22 @@ class RayPPOTrainer:
         ]:
             self.use_critic = False
         else:
-            raise NotImplementedError
-
+            raise NotImplementedError   
+        
         self._validate_config()
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
+        
+        
+            
+    def _init_wrapper(self):
+        self.use_multiturn_wrapper: bool = self.config.actor_rollout_ref.extra.use_multiturn_wrapper
+        if self.use_multiturn_wrapper:
+            self.wg_wrapper = vLLMAgentWrapper(
+                self.config.actor_rollout_ref.rollout,
+                wg=self.actor_rollout_wg,
+                tokenizer=self.tokenizer,
+                agent_config_path=self.config.actor_rollout_ref.extra.agent_config_path,
+            )
 
     def _validate_config(self):
         config = self.config
@@ -739,10 +753,13 @@ class RayPPOTrainer:
                 else self.config.actor_rollout_ref.rollout.agent.num_workers
             )
             test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, size_divisor)
-            if not self.async_rollout_mode:
-                test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+            if not self.use_multiturn_wrapper:
+                if not self.async_rollout_mode:
+                    test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+                else:
+                    test_output_gen_batch_padded = self.async_rollout_manager.generate_sequences(test_gen_batch_padded)
             else:
-                test_output_gen_batch_padded = self.async_rollout_manager.generate_sequences(test_gen_batch_padded)
+                test_output_gen_batch_padded = self.wg_wrapper.generate_sequences(test_gen_batch_padded)
 
             # unpad
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
@@ -1129,6 +1146,8 @@ class RayPPOTrainer:
 
         self._check_data_loader()
         
+        self._init_wrapper()
+        
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 metrics = {}
@@ -1178,10 +1197,13 @@ class RayPPOTrainer:
                 with marked_timer("step", timing_raw):
                     # generate a batch
                     with marked_timer("gen", timing_raw, color="red"):
-                        if not self.async_rollout_mode:
-                            gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                        if not self.use_multiturn_wrapper:
+                            if not self.async_rollout_mode:
+                                gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                            else:
+                                gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch)
                         else:
-                            gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch)
+                            gen_batch_output = self.wg_wrapper.generate_sequences(gen_batch)
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
 
@@ -1189,10 +1211,13 @@ class RayPPOTrainer:
                         with marked_timer("gen_max", timing_raw, color="purple"):
                             gen_baseline_batch = deepcopy(gen_batch)
                             gen_baseline_batch.meta_info["do_sample"] = False
-                            if not self.async_rollout_mode:
-                                gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
+                            if not self.use_multiturn_wrapper:
+                                if not self.async_rollout_mode:
+                                    gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
+                                else:
+                                    gen_baseline_output = self.async_rollout_manager.generate_sequences(gen_baseline_batch)
                             else:
-                                gen_baseline_output = self.async_rollout_manager.generate_sequences(gen_baseline_batch)
+                                gen_baseline_output = self.wg_wrapper.generate_sequences(gen_baseline_batch)
                             batch = batch.union(gen_baseline_output)
                             reward_baseline_tensor = self.reward_fn(batch)
                             reward_baseline_tensor = reward_baseline_tensor.sum(dim=-1)

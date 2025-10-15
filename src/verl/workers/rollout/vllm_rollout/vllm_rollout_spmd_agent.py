@@ -39,14 +39,16 @@ from vllm.distributed import parallel_state as vllm_ps
 from vllm.lora.request import LoRARequest
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.worker.worker_base import WorkerWrapperBase
+from transformers import PreTrainedTokenizer
 
 from verl import DataProto
 from verl.utils.model import compute_position_id_with_mask
-from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
+from verl.utils.profiler import GPUMemoryLogger, log_gpu_memory_usage, simple_timer
 from verl.workers.rollout.base import BaseRollout
 
 from agentflow.backend.vllm import VllmInjectionBackend
+from agentflow.backend.verl import VerlWgBackend, VerlWg
 from agentflow.agent.basic import ToolDrivenAgent
 from agentflow.agent.planner.llm_planner import LLMPlanner
 from agentflow.agent.executor.executor import VerificationSubtaskExecutor
@@ -105,6 +107,159 @@ DEFAULT_SEQ_TEMPLATE="""
 {solution}
 """
 
+class vLLMAgentWrapper:
+    
+    def __init__(
+        self,
+        config,
+        wg: VerlWg,
+        tokenizer: PreTrainedTokenizer,
+        agent_config_path: str = None,
+        **kwargs
+    ): 
+        self.config=config
+        if agent_config_path:
+            config = load_config(agent_config_path)
+        else:
+            config = None
+        self.logger = get_logger(config, __name__)
+        self.wg = wg
+        self.tokenizer = tokenizer
+        self.pad_token_id = tokenizer.pad_token_id
+        self.eos_token_id = self.tokenizer.eos_token_id
+        self.backend = VerlWgBackend(
+            config=config,
+            wg=wg,
+            tokenizer=tokenizer,
+            logger=self.logger,
+        )
+        tool_registry = ToolRegistry()
+        py_tool = PythonExecutionTool()
+        tool_registry.register(py_tool)
+        self.tool_registry = tool_registry
+        self.planner = LLMPlanner(
+            self.backend,
+        )
+        self.executor = VerificationSubtaskExecutor(
+            self.backend,
+            self.tool_registry,
+        )
+        
+    def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
+        """Generate sequences for a batch of prompts.
+
+        Args:
+            batch (DataProto): Input batch.
+
+        Returns:
+            DataProto: Output batch.
+            - prompts: [bsz, prompt_length], prompt token ids from dataset.
+            - responses: [bsz, response_length], output token ids include response tokens
+              from LLM generation and observation tokens from tool_calls.
+            - response_mask: [bsz, response_length], 1 for LLM generated tokens, 0 for observation/padding tokens.
+            - input_ids: [bsz, prompt_length + response_length], whole sequence token ids, including prompt tokens
+              and response tokens.
+            - attention_mask: [bsz, prompt_length + response_length], 0 for padding tokens, 1 for other tokens.
+            - position_ids: [bsz, prompt_length + response_length], incremental position ids.
+
+            For multi-turn conversations:
+            responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
+            response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
+        """
+        idx: torch.Tensor = prompts.batch["input_ids"]  # (bs, prompt_length)
+        # left-padded attention_mask
+        attention_mask: torch.Tensor = prompts.batch["attention_mask"]
+        position_ids: torch.Tensor = prompts.batch["position_ids"]
+
+        # used to construct attention_mask
+        eos_token_id = self.tokenizer.eos_token_id
+
+        batch_size = idx.size(0)
+
+        non_tensor_batch = prompts.non_tensor_batch
+        
+        extra_info: np.ndarray = non_tensor_batch.get("extra_info")
+        if extra_info is None:
+            extra_info=[{} for _ in range(batch_size)]
+            self.logger.warning("Extra info of current batch is missing, which may cause unexpected results")
+        
+        problems: List[str] = [extra_info[i].get("problem","") for i in range(batch_size)]
+        solutions: List[str] = [extra_info[i].get("solution","") for i in range(batch_size)]
+        
+        qa_sequences = [
+            DEFAULT_SEQ_TEMPLATE.format(problem=prob, solution=solu)
+            for prob, solu in zip(problems, solutions)
+        ]
+        
+        timing_generate = {}
+        with simple_timer("agent generation", timing_generate):
+        
+            plans = self.planner.plan(qa_sequences)
+            self.logger.debug("Planning finished, executing subtasks.")
+            reports = self.executor.execute(sequences=qa_sequences, plans=plans)
+            self.logger.debug("Subtasks ready, preforming final judge.")
+            rollouts = [build_rollout_for_model(sequence=seq, plan=plan, report=report, max_chars_per_subtask=2800) for seq, plan, report in zip(qa_sequences,plans,reports)]
+
+            final_inputs = [[
+                {"role":"system","content":FINAL_SYSTEM_PROMPT},
+                {"role":"user", "content":FINAL_USER_PROMPT.format(
+                    sequence = rollout,  
+                )}
+            ] for rollout in rollouts]
+            
+            final_outputs, _ = self.backend.generate(final_inputs)
+
+            
+            final_rollouts = [f"{rollout}\n{output}" for rollout, output in zip(rollouts, final_outputs)]
+
+            response_ids_list = []
+            for txt in final_rollouts:
+                ids = self.tokenizer(txt, add_special_tokens=False).input_ids
+                response_ids_list.append(ids)
+            self.logger.debug("Final judge ready, preparing data proto")
+            response = pad_2d_list_to_length(
+                response_ids_list,
+                self.pad_token_id,
+                max_length=self.config.response_length
+            ).to(idx.device)
+
+            seq = torch.cat([idx, response], dim=-1)
+
+            if self.config.calculate_log_probs: 
+                raise ValueError("Log probs not supported")
+
+            response_length = response.size(1)
+            delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
+            delta_position_id = delta_position_id.unsqueeze(0).expand(batch_size, -1)
+            if position_ids.dim() == 3:  # qwen2vl mrope
+                delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
+
+            response_position_ids = position_ids[..., -1:] + delta_position_id
+            position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
+
+            response_attention_mask = get_response_mask(
+                response_id=response,
+                eos_token=eos_token_id,
+                dtype=attention_mask.dtype
+            )
+            attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
+
+            batch = TensorDict(
+                {
+                    "prompts": idx,
+                    "responses": response,
+                    "input_ids": seq,
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                },
+                batch_size=batch_size,
+            )
+            gather_output = DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+        gather_output.meta_info["timing"] = timing_generate
+        gather_output = gather_output.to("cpu")
+        return gather_output
+        
+
 
 
 class vLLMAgentRollout(BaseRollout):
@@ -116,7 +271,7 @@ class vLLMAgentRollout(BaseRollout):
                  agent_config_path: str = None,
                  do_bon = False,
                  **kwargs):
-        """A vLLM rollout. It requires the module is supported by the vllm.
+        """A vLLM agent rollout which generates full rollout in a single round . It requires the module is supported by the vllm.
 
         Args:
             module: module here follows huggingface APIs
@@ -415,7 +570,9 @@ class vLLMAgentRollout(BaseRollout):
 
     
         plans = self.planner.plan(qa_sequences)
+        self.tool_logger.debug("Planning finished, executing subtasks.")
         reports = self.executor.execute(sequences=qa_sequences, plans=plans)
+        self.tool_logger.debug("Subtasks ready, preforming final judge.")
         rollouts = [build_rollout_for_model(sequence=seq, plan=plan, report=report, max_chars_per_subtask=2800) for seq, plan, report in zip(qa_sequences,plans,reports)]
 
         final_inputs = [[
@@ -426,6 +583,7 @@ class vLLMAgentRollout(BaseRollout):
         ] for rollout in rollouts]
         
         final_outputs, _ = self.agent_backend.generate(final_inputs)
+
         
         final_rollouts = [f"{rollout}\n{output}" for rollout, output in zip(rollouts, final_outputs)]
 
@@ -433,7 +591,7 @@ class vLLMAgentRollout(BaseRollout):
         for txt in final_rollouts:
             ids = self.tokenizer(txt, add_special_tokens=False).input_ids
             response_ids_list.append(ids)
-            
+        self.tool_logger.debug("Final judge ready, preparing data proto")
         response = pad_2d_list_to_length(
             response_ids_list,
             self.pad_token_id,

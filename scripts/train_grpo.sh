@@ -1,8 +1,9 @@
 set -x
 
 export WANDB_MODE=offline
+export WANDB_DIR=/root/workspace/agent-rm/wandb
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3,6
+export CUDA_VISIBLE_DEVICES=2,3,5,6
 export RAY_TEMP_DIR=/mnt/data/ray_temp
 export NCCL_TIMEOUT=3600  
 export HYDRA_FULL_ERROR=1
@@ -17,8 +18,8 @@ echo "PYTHONPATH = $PYTHONPATH"
 
 
 
-PROJECT_NAME=rm_grpo_1011 # project name
-EXP_NAME=grpo-2000-qwen2.5-7b-1 # exp name
+PROJECT_NAME=rm_grpo_1015 # project name
+EXP_NAME=grpo-2000-qwen2.5-7b-test-new # exp name
 
 ACTOR_MODEL_PATH=/root/workspace/agent-rm/models/Qwen-2.5-7B-Instruct
 
@@ -35,14 +36,13 @@ CONFIG_NAME=grpo_verifier # verl config name
 REWAED_FN_PATH=${SRC_DIR}/verl/utils/reward_score/agent_verifier.py
 AGENT_CONFIG_PATH=/root/workspace/agent-rm/Agent-Verifier/config/train_grpo.yaml
 
-n_gpus_per_node=5
+n_gpus_per_node=4
 nnodes=1
 
 
 ray stop
 ray start --head \
-    --num-cpus=16 \
-    --num-gpus=5 \
+    --num-gpus=4 \
     --plasma-directory=/tmp/ray_plasma \
     --object-store-memory=274877906944
 
@@ -53,8 +53,8 @@ python3 -m verl.trainer.main_ppo --config-path=$CONFIG_DIR --config-name=$CONFIG
     algorithm.adv_estimator=grpo \
     data.train_files="$train_files" \
     data.val_files="$test_files" \
-    data.train_batch_size=5 \
-    data.max_prompt_length=2800 \
+    data.train_batch_size=12 \
+    data.max_prompt_length=2400 \
     data.max_response_length=5600 \
     data.filter_overlong_prompts=True \
     data.truncation='left' \
@@ -63,9 +63,11 @@ python3 -m verl.trainer.main_ppo --config-path=$CONFIG_DIR --config-name=$CONFIG
     actor_rollout_ref.actor.ppo_mini_batch_size=1 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.ulysses_sequence_parallel_size=2 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.rollout.n=${ROLLOUT_N} \
-    actor_rollout_ref.rollout.name=vllm-agent \
+    actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.max_model_len=12800 \
     actor_rollout_ref.actor.checkpoint.save_contents='["hf_model"]' \
@@ -80,8 +82,8 @@ python3 -m verl.trainer.main_ppo --config-path=$CONFIG_DIR --config-name=$CONFIG
     trainer.n_gpus_per_node=$n_gpus_per_node \
     trainer.val_before_train=False \
     trainer.nnodes=$nnodes \
-    trainer.save_freq=40 \
-    trainer.test_freq=80 \
+    trainer.save_freq=60 \
+    trainer.test_freq=60 \
     trainer.rollout_data_dir=${SAVE_BASE_DIR}/${PROJECT_DIR}/rollout_data  \
     trainer.validation_data_dir=${SAVE_BASE_DIR}/${PROJECT_DIR}/validation_data \
     trainer.verl_dir=$SRC_DIR \
