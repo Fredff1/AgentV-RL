@@ -1,6 +1,9 @@
 # src/core/interfaces.py
-from typing import List, Tuple, Dict, Any, Protocol, Sequence, Union, runtime_checkable, ContextManager
+from typing import List, Tuple, Dict, Any, Protocol, Sequence, Union, runtime_checkable, ContextManager, Iterable, overload, Iterator
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from collections.abc import Sequence as SequenceABC
+
 
 @runtime_checkable
 class SupportChatTemplate(Protocol):
@@ -123,3 +126,5 @@ class CanChoiceProbs(Protocol):
 @runtime_checkable
 class CanContLogprobs(Protocol):
     def continuation_logprobs(self, prefixes: Sequence[str], continuations: Sequence[str]) -> List[float]: ...
+    
+    

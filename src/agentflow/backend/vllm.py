@@ -5,6 +5,7 @@ from logging import Logger
 from vllm import LLM, SamplingParams
 
 from agentflow.core.interfaces import CanGenerate,SupportChatTemplate
+from agentflow.core.types import GenerationResult
 from agentflow.utils.log_util import get_logger
 from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin, left_truncate_text_by_token, resolve_context_window_len
 
@@ -85,6 +86,35 @@ class VllmBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate):
         )
         texts = [result.outputs[0].text for result in results]
         return texts, [{"raw_output": result, "prompt":prompt} for result, prompt in zip(results, prompts)]
+    
+    def generate_new(self, prompts: List, extra: List[Dict] = None, **kwargs) -> GenerationResult:
+        """Generate sequences with gievn prompt list
+
+        Args:
+            prompts (List): Prompt list of chat messages or raw str. If chat messages are provided, it will automatically apply chat template
+            extra (List[Dict], optional): Extra info dicts. Defaults to None.
+            
+        Returns:
+            GenerationResult: wrapper generation results
+        """
+        if is_chat_messages(prompts):
+            prompts = self.apply_chat_template(prompts)
+        else:
+            max_prompt_len = resolve_context_window_len(self.engine, self.tokenizer) - self.sampling_config.get("max_tokens",1024) - 32
+            max_prompt_len = max(max_prompt_len, 128)
+            for i in range(len(prompts)):
+                prompts[i]=left_truncate_text_by_token(self.tokenizer, str(prompts[i]), max_prompt_len)
+                
+            
+        results = self.engine.generate(
+            prompts=prompts,
+            sampling_params=self.sampling_params,
+            use_tqdm=self.use_tqdm,
+        )
+        texts = [result.outputs[0].text for result in results]
+        metas = [{"raw_output": result, "prompt":prompt} for result, prompt in zip(results, prompts)]
+        return GenerationResult.from_legacy(texts,metas,{})
+    
     
     def _parse_config(self):
         backend_config = self.config["backend"]
@@ -168,6 +198,35 @@ class VllmInjectionBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTe
         )
         texts = [result.outputs[0].text for result in results]
         return texts, [{"raw_output": result, "prompt":prompt} for result, prompt in zip(results, prompts)]
+    
+    def generate_new(self, prompts: List, extra: List[Dict] = None, **kwargs) -> GenerationResult:
+        """Generate sequences with gievn prompt list
+
+        Args:
+            prompts (List): Prompt list of chat messages or raw str. If chat messages are provided, it will automatically apply chat template
+            extra (List[Dict], optional): Extra info dicts. Defaults to None.
+            
+        Returns:
+            GenerationResult: wrapper generation results
+        """
+        if is_chat_messages(prompts):
+            prompts = self.apply_chat_template(prompts)
+        else:
+            max_prompt_len = resolve_context_window_len(self.engine, self.tokenizer) - self.sampling_config.get("max_tokens",1024) - 32
+            max_prompt_len = max(max_prompt_len, 128)
+            for i in range(len(prompts)):
+                prompts[i]=left_truncate_text_by_token(self.tokenizer, str(prompts[i]), max_prompt_len)
+                
+            
+        results = self.engine.generate(
+            prompts=prompts,
+            sampling_params=self.sampling_params,
+            use_tqdm=self.use_tqdm,
+        )
+        texts = [result.outputs[0].text for result in results]
+        metas = [{"raw_output": result, "prompt":prompt} for result, prompt in zip(results, prompts)]
+        return GenerationResult.from_legacy(texts,metas,{})
+    
     
     def _parse_config(self):
         backend_config = self.config["backend"]
