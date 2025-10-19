@@ -1,8 +1,9 @@
 import os
 import re
 import copy
+import torch  
 import numpy as np
-from typing import List, Tuple, Dict, Any, Union, Optional, Protocol
+from typing import List, Tuple, Dict, Any, Union, Optional, Protocol, Sequence
 from collections import defaultdict
 from logging import Logger
 
@@ -34,6 +35,8 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
         logger: Logger = None, 
         max_prompt_length: int = 8192,
         truncation: bool = True,
+        chunk_size: Optional[int] = None,  
+        pad_fill_text: Optional[str] = None,  
         **kwargs,
     ):
         super().__init__()
@@ -48,6 +51,15 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
 
         self.truncation = truncation
         self.max_prompt_length = max_prompt_length
+        self._default_chunk_size = chunk_size
+        self._pad_fill_text = pad_fill_text  
+        
+    def _resolve_chunk_size(self, chunk_size: Optional[int] = None) -> int:
+        if isinstance(chunk_size, int) and chunk_size > 0:
+            return chunk_size
+        if isinstance(self._default_chunk_size, int) and self._default_chunk_size > 0:
+            return self._default_chunk_size
+        return 8
     
     
     def apply_chat_template(self, messages: List[List[Dict[str,str]]], 
@@ -65,6 +77,114 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
         )
         return result
     
+    def _pad_to_multiple(
+        self,
+        batch: Sequence[Any],
+        chunk_size: int,
+        *, 
+        is_chat: bool,
+    ) -> Tuple[list, list]:
+        batch = list(batch)
+        n = len(batch)
+        if n == 0 or chunk_size <= 1:
+            return batch, [True] * n
+
+        remain = n % chunk_size
+        if remain == 0:
+            return batch, [True] * n
+
+        need = chunk_size - remain
+        keep_mask = [True] * n
+
+        if is_chat:
+            filler = batch[-1] if n > 0 else [{"role": "user", "content": self._pad_fill_text or (self.tokenizer.eos_token or "")}]
+        else:
+            filler = batch[-1] if n > 0 else (self._pad_fill_text or (self.tokenizer.eos_token or ""))
+
+        for _ in range(need):
+            batch.append(filler if not isinstance(filler, (dict, list)) else copy.deepcopy(filler))
+            keep_mask.append(False)
+
+        return batch, keep_mask
+
+    def _generate(self, prompts: List, extra: List[Dict] = None, **kwargs) -> Tuple[List[str],List[Dict]]:
+
+        chunk_size = self._resolve_chunk_size(kwargs.pop("chunk_size", None))
+        sleep_after_inference = kwargs.pop("sleep_after_inference",True)
+
+        is_chat = is_chat_messages(prompts)
+        if is_chat:
+            raw_prompts = self.apply_chat_template(prompts)
+            if isinstance(raw_prompts, str):
+                raw_prompts = [raw_prompts]
+        else:
+            for i in range(len(prompts)):
+                prompts[i] = left_truncate_text_by_token(
+                    self.tokenizer, str(prompts[i]), self.max_prompt_length
+                )
+            raw_prompts = prompts
+
+        original_n = len(raw_prompts)
+
+        
+        padded_prompts, keep_mask = self._pad_to_multiple(raw_prompts, chunk_size, is_chat=False)
+        
+        padded_size = len(padded_prompts)
+
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+        model_inputs = self.tokenizer(
+            padded_prompts,
+            add_special_tokens=False,
+            padding=True,
+            truncation=True,
+            max_length=self.max_prompt_length,
+            return_attention_mask=True,
+            return_tensors="pt"
+        )
+
+        input_ids = model_inputs.pop("input_ids")
+        attention_mask = model_inputs.pop("attention_mask")
+        input_ids, attention_mask = verl_F.postprocess_data(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=self.max_prompt_length,
+            pad_token_id=self.tokenizer.pad_token_id,
+            left_pad=True,
+            truncation="left",
+        )
+        position_ids = compute_position_id_with_mask(attention_mask)
+
+        tensor_dict = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+        }
+        
+        input_proto_meta = {
+            "eos_token_id": self.tokenizer.eos_token_id, 
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "sleep_after_inference": sleep_after_inference,
+        }
+        
+        input_proto = DataProto.from_single_dict(
+            tensor_dict,
+            meta_info=input_proto_meta,
+        )
+
+        output_proto = self.wg.generate_sequences(input_proto, **kwargs)
+
+
+        responses_ids = output_proto.batch["responses"]
+        response_texts_all = self.tokenizer.batch_decode(responses_ids, skip_special_tokens=True)
+
+        response_texts = [t for t, keep in zip(response_texts_all, keep_mask) if keep]
+
+        metas = [{"raw_output": output_proto, "prompt": p, "padded_size":padded_size, "original_size":original_n} for p in (raw_prompts[:original_n])]
+
+        return response_texts, metas
+    
     
     def generate(self, prompts: List, extra: List[Dict] = None, **kwargs) -> Tuple[List[str],List[Dict]]:
         """Generate sequences with gievn prompt list
@@ -80,72 +200,7 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
         return self._generate(prompts, extra, **kwargs)
     
     
-    def _generate(self, prompts: List, extra: List[Dict] = None, **kwargs) -> Tuple[List[str],List[Dict]]:
-        """Generate sequences with gievn prompt list
 
-        Args:
-            prompts (List): Prompt list of chat messages or raw str. If chat messages are provided, it will automatically apply chat template
-            extra (List[Dict], optional): Extra info dicts. Defaults to None.
-
-        Returns:
-            Tuple[List[str],List[Dict]]: Generated sequences and any metainfo
-                - The metainfo format: {"raw_output":Dataproto}
-        """
-        
-        if is_chat_messages(prompts):
-            raw_prompts = self.apply_chat_template(prompts)
-        else:
-            for i in range(len(prompts)):
-                prompts[i]=left_truncate_text_by_token(self.tokenizer, str(prompts[i]), self.max_prompt_length)
-                raw_prompts = prompts
-                
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-            
-        model_inputs = self.tokenizer(
-            raw_prompts,
-            add_special_tokens=False,
-            padding=True,                
-            truncation=True,              
-            max_length=self.max_prompt_length,
-            return_attention_mask=True,
-            return_tensors="pt"           
-        )
-        
-        input_ids = model_inputs.pop("input_ids")
-        attention_mask = model_inputs.pop("attention_mask")
-        input_ids, attention_mask = verl_F.postprocess_data(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_length=self.max_prompt_length,
-            pad_token_id=self.tokenizer.pad_token_id,
-            left_pad=True,
-            truncation="left",
-        )
-        position_ids = compute_position_id_with_mask(attention_mask)
-
-        tensor_dict = {
-            "input_ids":input_ids,
-            "attention_mask":attention_mask,
-            "position_ids":position_ids,
-        }
-        input_proto = DataProto.from_single_dict(tensor_dict,meta_info={"eos_token_id":self.tokenizer.eos_token_id,"pad_token_id":self.tokenizer.pad_token_id})
-        # TODO 参考verl的方法构造wg需要的输入
-        # 1 verl/utils/dataset/rl_dataset.py 将一个message变成ids,计算mask position ids
-        # 2 verl/trainer/ppo/ray_trainer.py 构造一个data proto
-        # wg需要的tensor包括 input_ids attention_mask position_ids 
-        # metainfo包括 meta_info.eos_token_id
-        # non tensor batch可以没有
-        
-        output_proto = self.wg.generate_sequences(
-            input_proto
-        )
-        
-        responses_ids = output_proto.batch["responses"]
-        response_texts = self.tokenizer.batch_decode(responses_ids)
-        
-        
-        return response_texts, [{"raw_output": output_proto, "prompt":prompt} for prompt in prompts]
     
     def generate_sequences(self, prompts: DataProto, **kwargs):
         return self.wg.generate_sequences(prompts, **kwargs)

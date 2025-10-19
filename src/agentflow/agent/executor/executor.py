@@ -12,6 +12,7 @@ from agentflow.tools.caller import ToolCaller
 from agentflow.tools.parser import TagToolParser
 from agentflow.tools.code.python_execution import PythonExecutionTool
 from agentflow.utils.tag_util import find_tags
+from agentflow.utils.log_util import get_logger
 
 from agentflow.agent.planner.interfaces import Plan, Subtask
 from .interfaces import SubtaskReport, ExecutionReport, SubtaskExecutor, VerificationSubtaskReport
@@ -19,7 +20,7 @@ from .prompts import _DEFAULT_SYSTEM, _USER_TPL
 
 @dataclass
 class ExecutorConfig:
-    max_rounds_per_subtask: int = 4
+    max_rounds_per_subtask: int = 3
     default_tool_max_calls: int = 2
     system_prompt: str = _DEFAULT_SYSTEM
     helper_code_snippets: List[str] = field(default_factory=list)
@@ -35,7 +36,7 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
         self.backend = backend
         self.registry = registry or ToolRegistry()
         self.config = config or ExecutorConfig()
-
+        self.logger = get_logger()
         self.parser = TagToolParser()
         self.caller = ToolCaller(self.registry, self.parser)
 
@@ -96,10 +97,10 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
         return True
         
 
-    def execute(self, *, sequences: List[str], plans: List[Plan]) -> List[ExecutionReport]:
-        return self._execute_all(sequences=sequences,plans=plans)
+    def execute(self, *, sequences: List[str], plans: List[Plan], **kwargs) -> List[ExecutionReport]:
+        return self._execute_all(sequences=sequences,plans=plans, **kwargs)
     
-    def _execute_all(self, *, sequences: List[str], plans: List[Plan]) -> List[ExecutionReport]:
+    def _execute_all(self, *, sequences: List[str], plans: List[Plan], **kwargs) -> List[ExecutionReport]:
         subtasks_per_plan: List[List[Subtask]] = []
         subtask_reports_per_plan: List[List[VerificationSubtaskReport]] = [[] for _ in plans]
         stopped: List[bool] = [False] * len(plans)
@@ -113,6 +114,7 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
                 max_subtasks = len(subtask_list)
         if self.config.use_tqdm:
             process_bar = tqdm(total=max_subtasks,desc="Processing subtasks:")
+        
         while sub_task_idx < max_subtasks:
             input_msgs = []
             input_msg_indicies: List[int] = []
@@ -124,12 +126,14 @@ class VerificationSubtaskExecutor(SubtaskExecutor):
                 if sub_task_idx < len(subtasks):
                     input_msgs.append(self._format_subtask_prompt(seq,plan,subtasks[sub_task_idx]))
                     input_msg_indicies.append(idx)
+                    
             if len(input_msgs) < 1:
                 break
             try:
-                answers, metas = self.agent.generate(input_msgs)
+                answers, metas = self.agent.generate(input_msgs, None, **kwargs)
+                
             except Exception as e:
-                print(e)
+                self.logger.exception(e)
                 sub_task_idx += 1
                 if self.config.use_tqdm:
                     process_bar.update(1)

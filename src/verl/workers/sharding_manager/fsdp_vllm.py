@@ -123,7 +123,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         if is_version_ge(pkg="vllm", minver="0.7.3"):
             VLLMHijack.hijack()
         
-        self.custom_free_cache_engine = True
+        self.sleep_after_inference = True
 
     @GPUMemoryLogger(role="fsdp vllm sharding_manager", logger=logger)
     def __enter__(self):
@@ -242,7 +242,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
     
     @GPUMemoryLogger(role="fsdp vllm sharding_manager", logger=logger)
     def __exit__(self, exc_type, exc_value, traceback):
-        if self.rollout_config.free_cache_engine and self.custom_free_cache_engine:
+        if self.rollout_config.free_cache_engine and self.sleep_after_inference:
             self.inference_engine.sleep(level=1)
 
         self.module.train()

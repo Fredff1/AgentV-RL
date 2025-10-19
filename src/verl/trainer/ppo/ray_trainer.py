@@ -61,7 +61,7 @@ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seql
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 
-from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd_agent import vLLMAgentWrapper
+from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd_agent import vLLMAgentWrapper, vLLMAgentMultiTurnWrapper
 
 WorkerType = type[Worker]
 
@@ -392,6 +392,13 @@ class RayPPOTrainer:
     def _init_wrapper(self):
         self.use_multiturn_wrapper: bool = self.config.actor_rollout_ref.extra.use_multiturn_wrapper
         if self.use_multiturn_wrapper:
+            self.wg_wrapper = vLLMAgentMultiTurnWrapper(
+                self.config.actor_rollout_ref.rollout,
+                wg=self.actor_rollout_wg,
+                tokenizer=self.tokenizer,
+                agent_config_path=self.config.actor_rollout_ref.extra.agent_config_path,
+            )
+        else:
             self.wg_wrapper = vLLMAgentWrapper(
                 self.config.actor_rollout_ref.rollout,
                 wg=self.actor_rollout_wg,
@@ -641,10 +648,11 @@ class RayPPOTrainer:
         except Exception as e:
             print(f"Warning: Could not set total_training_steps in config. Structure missing? Error: {e}")
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, **kwargs):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
         filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
+        agent_info = kwargs.get("agent_info", None)
 
         n = len(inputs)
         base_data = {
@@ -655,6 +663,10 @@ class RayPPOTrainer:
         }
 
         for k, v in reward_extra_infos_dict.items():
+            if len(v) == n:
+                base_data[k] = v
+
+        for k, v in agent_info.items():
             if len(v) == n:
                 base_data[k] = v
 
@@ -942,7 +954,7 @@ class RayPPOTrainer:
                 worker_group=self.actor_rollout_wg,
             )
 
-    def _save_checkpoint(self):
+    def _save_checkpoint(self, batch: DataProto, reward_extra_infos_dict: dict):
         from verl.utils.fs import local_mkdir_safe
 
         # path: given_path + `/global_step_{global_steps}` + `/actor`
@@ -992,6 +1004,23 @@ class RayPPOTrainer:
         dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
         dataloader_state_dict = self.train_dataloader.state_dict()
         torch.save(dataloader_state_dict, dataloader_local_path)
+
+        # save train_data
+        inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
+        outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
+        scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+        agent_info = {
+                "plans": batch.non_tensor_batch["plans"],
+                "subtask_executions": batch.non_tensor_batch["subtask_executions"],
+            }
+        self._dump_generations(
+            inputs=inputs,
+            outputs=outputs,
+            scores=scores,
+            reward_extra_infos_dict=reward_extra_infos_dict,
+            dump_path=self.config.trainer.default_local_dir,
+            agent_info=agent_info,
+        )
 
         # latest checkpointed iteration tracker (for atomic usage)
         local_latest_checkpointed_iteration = os.path.join(
@@ -1369,12 +1398,17 @@ class RayPPOTrainer:
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+                            agent_info = {
+                                    "plans": batch.non_tensor_batch["plans"],
+                                    "subtask_executions": batch.non_tensor_batch["subtask_executions"],
+                                }
                             self._dump_generations(
                                 inputs=inputs,
                                 outputs=outputs,
                                 scores=scores,
                                 reward_extra_infos_dict=reward_extra_infos_dict,
-                                dump_path=rollout_data_dir,
+                                dump_path=self.config.trainer.default_local_dir,
+                                agent_info=agent_info,
                             )
 
                     # validate
@@ -1409,7 +1443,7 @@ class RayPPOTrainer:
                         if esi_close_to_expiration:
                             print("Force saving checkpoint: ESI instance expiration approaching.")
                         with marked_timer("save_checkpoint", timing_raw, color="green"):
-                            self._save_checkpoint()
+                            self._save_checkpoint(batch, reward_extra_infos_dict)
 
                 with marked_timer("stop_profile", timing_raw):
                     self._stop_profiling(do_profile)

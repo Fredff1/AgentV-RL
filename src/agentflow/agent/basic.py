@@ -10,6 +10,7 @@ from agentflow.tools.registry import ToolRegistry
 from agentflow.tools.caller import ToolCaller       
 from agentflow.tools.base import ToolParser      
 from agentflow.utils.chat_template import is_chat_messages   
+from agentflow.utils.log_util import get_logger
 
 class ToolDrivenAgent(CanGenerate):
     """An agent which can conduct multi-turn generation with tool-usage
@@ -38,6 +39,7 @@ class ToolDrivenAgent(CanGenerate):
         self.max_rounds = max_rounds
         self.finish_fn = finish_fn
         self.error_fn = error_fn
+        self.logger = get_logger()
 
     def generate(
         self, 
@@ -72,7 +74,8 @@ class ToolDrivenAgent(CanGenerate):
             batch_extra = [contexts[i].meta for i in active]
             try:
                 texts, backend_metas = self.backend.generate(batch_inputs, extra=batch_extra, **kwargs)
-            except:
+            except Exception as e:
+                self.logger.exception(e)
                 break
             
             for j, i in enumerate(active):
@@ -122,7 +125,6 @@ class ToolDrivenAgent(CanGenerate):
         for i in range(prompt_len):
             assistant_messages = contexts[i].all_round_messages()
             final_texts[i] = trans_messages_to_text(assistant_messages)
-        metas: List[Dict] = [{} for i in range(prompt_len)]
         return final_texts, metas
             
             

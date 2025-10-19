@@ -14,107 +14,107 @@ from agentflow.core.interfaces import CanGenerate
 RETRY_FORMAT_SUFFIX = "Output a standard json-format object only"
 
 MINIMAL_FALLBACK_OBJ = {
-    "problem_brief": "",
-    "asked_quantity": "",
-    "assumptions_required": [],
-    "subtasks": [
-        {"id":"s0","title":"intent check","rationale":"WHAT vs RESULT",
-         "category":"intent_check","inputs":{"from":["QUESTION","REASONING"]},
-         "tool_hint":{"python":False,"search":False,"max_calls":1},
-         "expected_produce":{"type":"boolean","schema":{"meaning":"match"}},
-         "stop_on_fail": True},
-        {"id":"s1","title":"assumption audit","rationale":"illegal premise?",
-         "category":"assumption_audit","inputs":{"from":["QUESTION","REASONING"]},
-         "tool_hint":{"python":False,"search":False,"max_calls":1},
-         "expected_produce":{"type":"boolean","schema":{"meaning":"ok"}},
-         "stop_on_fail": True}
+    "problem_statement": "",
+    "target_quantity": "",
+    "required_assumptions": [],
+    "verification_units": [
+        {"id":"u0","title":"intent check","justification":"WHAT vs RESULT",
+         "category":"intent_validation","inputs":{"from":["Problem","Solution"]},
+         "tool_spec":{"python":False,"search":False,"max_calls":1},
+         "expected_output":{"type":"boolean","schema":{"meaning":"match"}},
+         "stop_on_failure": True},
+        {"id":"u1","title":"premise verification","justification":"illegal premise?",
+         "category":"assumption_audit","inputs":{"from":["Problem","Solution"]},
+         "tool_spec":{"python":False,"search":False,"max_calls":1},
+         "expected_output":{"type":"boolean","schema":{"meaning":"ok"}},
+         "stop_on_failure": True}
     ],
-    "stop_conditions": ["asked_quantity mismatch confirmed"]
+    "termination_conditions": ["target_quantity mismatch confirmed"]
 }
 
 FIXED_SELF_SOLVE_SUBTASK = {
-    "id": "fixed_self_solve",
-    "title": "Self-solve then compare with reference answer",
-    "rationale": "Independently solve the question without using the provided answer; then compare with answer a.",
+    "id": "self_solve_and_verify",
+    "title": "Self-solve then compare with the solution",
+    "justification": "Independently solve the question without referencing solution; then compare with the solution.",
     "category": "self_solve_compare",
-    "inputs": {"from": ["QUESTION", "GIVEN_ANSWER"]}, 
-    "tool_hint": {"python": True, "search": False, "max_calls": 2},
-    "expected_produce": {
+    "inputs": {"from": ["Problem", "Solution"]}, 
+    "tool_spec": {"python": True, "search": False, "max_calls": 5},
+    "expected_output": {
         "type": "boolean",
         "schema": {
-            "meaning": "is the reference answer correct per an independent solution?",
+            "meaning": "Determines whether the solution is correct.",
             "must_output": {
-                "self_result": "model's independent final result (value/expression + unit/type)", 
-                "compare": "differences or proof of equivalence vs a",
+                "self_result": "Independent final result (value/expression + unit/type)", 
+                "compare": "A comparison showing differences or proof of equivalence with the provided solution.",
                 "binding": "optional: python check / key equation chain"
             },
             "tolerance": "1e-6"
         }
     },
-    "stop_on_fail": False
+    "stop_on_failure": False
 }
 
 FIXED_OVERALL_SUBTASK = {
-    "id": "fixed_overall",
-    "title": "Overall QA Judgement",
-    "rationale": "Directly judge correctness using only QUESTION and full REASONING (final answer included).",
+    "id": "Overall_Quality_Judgement",
+    "title": "Overall_Quality_Judgement",
+    "justification": "Directly judge correctness using only Problem and Solution (final answer included).",
     "category": "final_consistency",
-    "inputs": {"from": ["QUESTION", "REASONING"]},
-    "tool_hint": {"python": True, "search": False, "max_calls": 1},
-    "expected_produce": {
+    "inputs": {"from": ["Problem", "Solution"]},
+    "tool_spec": {"python": True, "search": False, "max_calls": 5},
+    "expected_output": {
         "type": "boolean",
         "schema": {
-            "meaning": "is the final stated answer correct?",
+            "meaning": "Determines whether the final solution answer is correct.",
             "must_extract_final_answer": True,
             "must_state_reason": True
         }
     },
-    "stop_on_fail": False
+    "stop_on_failure": False
 }
 
 
 class JsonPlanParser:
     """Robust JSON extractor + validator."""
-    REQUIRED_TOP = ["problem_brief", "asked_quantity", "assumptions_required", "subtasks"]
-    REQUIRED_SUB = ["id", "title", "rationale", "category", "expected_produce", "stop_on_fail"]
+    REQUIRED_TOP = ["problem_statement", "target_quantity", "required_assumptions", "verification_units"]
+    REQUIRED_SUB = ["id", "title", "justification", "category", "expected_output", "stop_on_failure"]
 
     @classmethod
     def _inject_fixed_subtasks(cls, obj: Dict[str, Any]) -> None:
         """Append fixed subtasks if missing. The order is: self_solve -> overall."""
-        ids = {st.get("id", "") for st in obj["subtasks"] if isinstance(st, dict)}
-        assert isinstance(obj["subtasks"],list)
+        ids = {st.get("id", "") for st in obj["verification_units"] if isinstance(st, dict)}
+        assert isinstance(obj["verification_units"],list)
         if FIXED_SELF_SOLVE_SUBTASK["id"] not in ids:
-            obj["subtasks"].insert(0, dict(FIXED_SELF_SOLVE_SUBTASK))
+            obj["verification_units"].insert(0, dict(FIXED_SELF_SOLVE_SUBTASK))
         ids.add(FIXED_SELF_SOLVE_SUBTASK["id"])
         if FIXED_OVERALL_SUBTASK["id"] not in ids:
-            obj["subtasks"].insert(0, dict(FIXED_OVERALL_SUBTASK))
+            obj["verification_units"].insert(0, dict(FIXED_OVERALL_SUBTASK))
 
     @classmethod
     def validate_and_coerce(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
         for k in cls.REQUIRED_TOP:
-            obj.setdefault(k, "" if k in ["problem_brief","asked_quantity"] else ([] if k!="subtasks" else []))
-        if not isinstance(obj["assumptions_required"], list):
-            obj["assumptions_required"] = []
-        if not isinstance(obj["subtasks"], list):
-            obj["subtasks"] = []
+            obj.setdefault(k, "" if k in ["problem_statement","target_quantity"] else ([] if k!="verification_units" else []))
+        if not isinstance(obj["required_assumptions"], list):
+            obj["required_assumptions"] = []
+        if not isinstance(obj["verification_units"], list):
+            obj["verification_units"] = []
 
         fixed = []
-        for i, st in enumerate(obj["subtasks"], 1):
+        for i, st in enumerate(obj["verification_units"], 1):
             if not isinstance(st, dict):
                 continue
             for k in cls.REQUIRED_SUB:
                 st.setdefault(k, True if k=="stop_on_fail" else "")
-            st.setdefault("inputs", {"from":["QUESTION","REASONING"]})
-            st.setdefault("tool_hint", {"python": False, "search": False, "max_calls": 1})
-            st.setdefault("expected_produce", {"type": "boolean", "schema": {"meaning":"pass/fail"}})
-            if not st.get("id"): st["id"] = f"s{i}"
+            st.setdefault("inputs", {"from":["Problem","Solution"]})
+            st.setdefault("tool_spec", {"python": False, "search": False, "max_calls": 1})
+            st.setdefault("expected_output", {"type": "boolean", "schema": {"meaning":"pass/fail"}})
+            if not st.get("id"): st["id"] = f"u{i}"
             fixed.append(st)
-        obj["subtasks"] = fixed
+        obj["verification_units"] = fixed
         
         cls._inject_fixed_subtasks(obj)
 
-        obj.setdefault("stop_conditions", [
-            "asked_quantity mismatch confirmed",
+        obj.setdefault("termination_conditions", [
+            "target_quantity mismatch confirmed",
             "critical assumption violated"
         ])
         return obj
@@ -122,24 +122,24 @@ class JsonPlanParser:
     @staticmethod
     def to_plan(obj: Dict[str, Any]) -> Plan:
         subtasks = []
-        for st in obj.get("subtasks", []):
+        for st in obj.get("verification_units", []):
             subtasks.append(Subtask(
                 id=st["id"],
                 title=st["title"],
-                rationale=st["rationale"],
+                rationale=st["justification"],
                 category=st["category"],
                 inputs=st.get("inputs", {}),
-                tool_hint=st.get("tool_hint", {}),
-                expected_produce=st.get("expected_produce", {}),
-                stop_on_fail=bool(st.get("stop_on_fail", True))
+                tool_hint=st.get("tool_spec", {}),
+                expected_produce=st.get("expected_output", {}),
+                stop_on_fail=bool(st.get("stop_on_failure", True))
             ))
         return Plan(
-            problem_brief=obj.get("problem_brief",""),
-            asked_quantity=obj.get("asked_quantity",""),
-            assumptions_required=obj.get("assumptions_required",[]),
+            problem_brief=obj.get("problem_statement",""),
+            asked_quantity=obj.get("target_quantity",""),
+            assumptions_required=obj.get("required_assumptions",[]),
             subtasks=subtasks,
             reasoning=obj.get("reasoning",""),
-            stop_conditions=obj.get("stop_conditions",[]),
+            stop_conditions=obj.get("termination_conditions",[]),
             meta=obj.get("meta",{})
         )
         
@@ -185,17 +185,24 @@ class LLMPlanner(BasePlanner):
 
     def plan(self, sequences: List[str], extra: Optional[List[Dict[str,Any]]] = None, **kwargs) -> List[Plan]:
         batch_prompts = [self._build_prompt(seq, strengthen_format=False) for seq in sequences]
-        texts, metas = self.backend.generate(batch_prompts, extra=extra if extra else None)
+        batch_outputs = ["" for _ in range(len(sequences))]
+        texts, metas = self.backend.generate(batch_prompts, extra=extra if extra else None, **kwargs)
+
+
 
         plans: List[Optional[Plan]] = [None] * len(sequences)
         failed_idxs: List[int] = []
 
         for i, raw in enumerate(texts):
             try:
+
+                batch_outputs[i] = raw
                 obj = self._parse_plan_obj(raw)
                 plans[i] = self._coerce_to_plan(obj)
+
             except Exception:
                 failed_idxs.append(i)
+   
 
 
         attempt = 1
@@ -210,11 +217,12 @@ class LLMPlanner(BasePlanner):
                 if extra is not None:
                     retry_extra = [extra[i] if i < len(extra) and extra[i] is not None else {} for i in failed_idxs]
 
-                retry_texts, retry_metas = self.backend.generate(retry_prompts, extra=retry_extra)
+                retry_texts, retry_metas = self.backend.generate(retry_prompts, extra=retry_extra, **kwargs)
 
                 next_failed: List[int] = []
                 for pos, raw in enumerate(retry_texts):
                     orig_i = failed_idxs[pos]
+                    batch_outputs[orig_i] = raw
                     try:
                         obj_i = self._parse_plan_obj(raw)
                         plans[orig_i] = self._coerce_to_plan(obj_i)
@@ -236,4 +244,7 @@ class LLMPlanner(BasePlanner):
                 except Exception:
                     raise last_err or RuntimeError("planner failed without explicit error")
 
-        return [p for p in plans]  
+        for i, conv in enumerate(batch_prompts):
+            conv.append({"role":"assistant","content": batch_outputs[i]})
+
+        return [p for p in plans]

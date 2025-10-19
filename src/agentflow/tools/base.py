@@ -21,7 +21,14 @@ class ToolCallRequest:
             content=data["content"],
             meta=data.get("meta",{})
         )
-    
+    def to_dict(self) -> Dict:
+        return {
+            "index": self.index,
+            "name": self.name,
+            "content": self.content,
+            "meta": self.meta,
+        }
+
 @dataclass
 class ToolCallResult:
     """Wrapper class for a tool call result
@@ -45,6 +52,17 @@ class ToolCallResult:
             index=data.get("index",0),
             call=ToolCallRequest.from_dict(data.get("call")),
         )
+        
+    def to_dict(self) -> Dict:
+        return {
+            "tool_name": self.tool_name,
+            "request_content": self.request_content,
+            "output": self.output,
+            "meta": self.meta,
+            "error": self.error,
+            "index": self.index,
+            "call": self.call.to_dict(),
+        }
     
     
 
@@ -159,5 +177,3 @@ class BaseTool(ABC):
             index=getattr(call, "index", -1),
             call=call,
         )
-
-

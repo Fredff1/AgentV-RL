@@ -27,6 +27,14 @@ class SubtaskReport:
             rounds_used=data.get("rounds_used",0),
             notes=data.get("notes",{}),
         )
+        
+    def to_dict(self) -> Dict:
+        return {
+            "subtask_id": self.subtask_id,
+            "raw_trace": self.raw_trace,
+            "rounds_used": self.rounds_used,
+            "notes": self.notes,
+        }
 
 @dataclass
 class VerificationSubtaskReport(SubtaskReport):
@@ -68,6 +76,13 @@ class ExecutionReport:
             subtask_reports=sub_reps,
             meta=data.get("meta",{}),
         )
+        
+    def to_dict(self) -> Dict:
+        return {
+            "sequence_id": self.sequence_id,
+            "subtask_reports": [report.to_dict() for report in self.subtask_reports],
+            "meta": self.meta,
+        }
     
 class SubtaskExecutor:
     def execute(self, *, sequences: List[str], plans: List[Plan]) -> List[ExecutionReport]:

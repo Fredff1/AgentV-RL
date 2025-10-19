@@ -766,6 +766,11 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     def generate_sequences(self, prompts: DataProto):
         # Support all hardwares
         prompts = prompts.to(get_device_id())
+        
+        sleep_after_inference = prompts.meta_info.get("sleep_after_inference",True)\
+            
+        if hasattr(self.rollout_sharding_manager, "sleep_after_inference"):
+            setattr(self.rollout_sharding_manager, "sleep_after_inference", sleep_after_inference)
 
         assert self._is_rollout
 
@@ -789,6 +794,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             log_gpu_memory_usage("After rollout generation", logger=logger)
 
             output = self.rollout_sharding_manager.postprocess_data(output)
+            
+        if hasattr(self.rollout_sharding_manager, "sleep_after_inference"):
+            setattr(self.rollout_sharding_manager, "sleep_after_inference", True)
 
         timing_generate.update(self.rollout_sharding_manager.timing)
         # We calculate the average timing across all ranks

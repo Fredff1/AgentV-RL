@@ -28,6 +28,18 @@ class Subtask:
             expected_produce=data.get("expected_produce",{}),
             stop_on_fail=data.get("stop_on_fail",True)
         )
+        
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "rationale": self.rationale,
+            "category": self.category,
+            "inputs": self.inputs,
+            "tool_hint": self.tool_hint,
+            "expected_produce": self.expected_produce,
+            "stop_on_fail": self.stop_on_fail
+        }
 
 @dataclass
 class Plan:
@@ -51,6 +63,17 @@ class Plan:
             stop_conditions=data.get("stop_conditions",[]),
             meta=data.get("meta",{})
         )
+        
+    def to_dict(self) -> Dict:
+        return {
+            "problem_brief": self.problem_brief,
+            "asked_quantity": self.asked_quantity,
+            "assumptions_required": self.assumptions_required,
+            "subtasks": [sub.to_dict() for sub in self.subtasks],
+            "reasoning": self.reasoning,
+            "stop_conditions": self.stop_conditions,
+            "meta": self.meta
+        }
     
     
 
