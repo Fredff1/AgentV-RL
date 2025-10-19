@@ -2,7 +2,8 @@
 from typing import List, Tuple, Dict, Any, Protocol, Sequence, Union, runtime_checkable, ContextManager, Iterable, overload, Iterator
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from collections.abc import Sequence as SequenceABC
+
+
 
 
 @runtime_checkable
@@ -57,11 +58,11 @@ class CanGenerate(Protocol):
         """Generate sequences with gievn prompt list
 
         Args:
-            prompts (List): Prompt list
-            extra (List[Dict], optional): Extra info dicts. Defaults to None.
+            prompts (List): Prompt list of chat messages or raw str.
+            extra (List[Dict], optional): Extra info dicts for generation. Defaults to None.
 
         Returns:
-            Tuple[List[str],List[Dict]]: Generated sequences and any metainfo
+            Tuple[List[str],List[Dict]]: Generated string sequences and metainfo of the generation.
         """
         ...
 

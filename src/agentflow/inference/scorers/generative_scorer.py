@@ -31,7 +31,7 @@ Your judgement:
         system_prompt: str = None,
         user_prompt: str = None,
         *,
-        prob_bs: int = 4,
+        prob_bs: int = 1,
         choice_labels: Sequence[str] = ("true", "false"), 
         eps: float = 1e-15,   
     ):
@@ -59,7 +59,10 @@ Your judgement:
         all_probs: List[List[float]] = []
         for _, pref_chunk in tqdm(self._chunk(prefixes, self.prob_bs),desc="Calculating probs"):
             choices_chunk = [list(labels) for _ in range(len(pref_chunk))]
-            probs_chunk = self.prob_calculator.choice_probs(pref_chunk, choices_chunk, **kw)
+            try:
+                probs_chunk = self.prob_calculator.choice_probs(pref_chunk, choices_chunk, **kw)
+            except Exception:
+                probs_chunk = [[0.0 for _ in labels] for _ in range(len(pref_chunk))]
             probs_chunk = [list(map(float, p)) for p in probs_chunk]
             all_probs.extend(probs_chunk)
         return all_probs

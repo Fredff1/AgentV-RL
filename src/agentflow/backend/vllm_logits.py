@@ -10,7 +10,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from agentflow.utils.log_util import get_logger
 from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin, left_truncate_text_by_token, resolve_context_window_len
 from agentflow.core.interfaces import CanGenerate, CanChoiceProbs,SupportChatTemplate
-from agentflow.core.types import GenerationResult
+
 
 class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceProbs,SupportChatTemplate):
     """A Vllm backend for both text generation and prob calculation
@@ -77,7 +77,7 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
         self.vllm_config = backend_config.get("vllm", {})
         self.hf_config = backend_config.get("hf", {"device":"cuda","torch_dtype":"auto"})
 
-    def generate(self, prompts: List[Any], extra: List[Dict] | None = None, **kwargs) -> Tuple[List[str], List[Dict]]:
+    def _generate(self, prompts: List[Any], extra: List[Dict] | None = None, **kwargs) -> Tuple[List[str], List[Dict]]:
         """Generate sequences with gievn prompt list
 
         Args:
@@ -86,7 +86,7 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
 
         Returns:
             Tuple[List[str],List[Dict]]: Generated sequences and any metainfo
-                - The metainfo format: {"raw_output":<raw_vllm_output_object>}
+                - The metainfo format: {"raw_output":raw_vllm_output_object}
         """
         sp = self.sampling_params
         if kwargs:
@@ -104,6 +104,20 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
         results = self.vllm.generate(prompts=prompts, sampling_params=self.sampling_params,use_tqdm=self.use_tqdm,)
         texts = [r.outputs[0].text if r.outputs else "" for r in results]
         metas = [{"raw_output": r, "prompt":prompt} for r, prompt in zip(results, prompts)]
+        return texts, metas
+    
+    def generate(self, prompts: List[Any], extra: List[Dict] | None = None, **kwargs) -> Tuple[List[str], List[Dict]]:
+        """Generate sequences with gievn prompt list
+
+        Args:
+            prompts (List): Prompt list of chat messages or raw str. If chat messages are provided, it will automatically apply chat template
+            extra (List[Dict], optional): Extra info dicts. Defaults to None.
+
+        Returns:
+            Tuple[List[str],List[Dict]]: Generated sequences and any metainfo
+                - The metainfo format: {"raw_output":raw_vllm_output_object}
+        """
+        texts, metas = self._generate(prompts, extra, **kwargs)
         return texts, metas
 
 
@@ -191,33 +205,7 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
 
         return all_group_probs
     
-    def generate_new(self, prompts: List, extra: List[Dict] = None, **kwargs) -> GenerationResult:
-        """Generate sequences with gievn prompt list
 
-        Args:
-            prompts (List): Prompt list of chat messages or raw str. If chat messages are provided, it will automatically apply chat template
-            extra (List[Dict], optional): Extra info dicts. Defaults to None.
-            
-        Returns:
-            GenerationResult: wrapper generation results
-        """
-        if is_chat_messages(prompts):
-            prompts = self.apply_chat_template(prompts)
-        else:
-            max_prompt_len = resolve_context_window_len(self.engine, self.tokenizer) - self.sampling_config.get("max_tokens",1024) - 32
-            max_prompt_len = max(max_prompt_len, 128)
-            for i in range(len(prompts)):
-                prompts[i]=left_truncate_text_by_token(self.tokenizer, str(prompts[i]), max_prompt_len)
-                
-            
-        results = self.engine.generate(
-            prompts=prompts,
-            sampling_params=self.sampling_params,
-            use_tqdm=self.use_tqdm,
-        )
-        texts = [result.outputs[0].text for result in results]
-        metas = [{"raw_output": result, "prompt":prompt} for result, prompt in zip(results, prompts)]
-        return GenerationResult.from_legacy(texts,metas,{})
     
     @torch.no_grad()
     def choice_probs_old(self, prefixes: Sequence[str], choices: Sequence[Sequence[str]]) -> List[List[float]]:

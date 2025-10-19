@@ -398,6 +398,7 @@ class RayPPOTrainer:
                 tokenizer=self.tokenizer,
                 agent_config_path=self.config.actor_rollout_ref.extra.agent_config_path,
             )
+            
 
     def _validate_config(self):
         config = self.config

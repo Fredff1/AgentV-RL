@@ -119,20 +119,26 @@ class vLLMAgentWrapper:
     ): 
         self.config=config
         if agent_config_path:
-            config = load_config(agent_config_path)
+            self.agent_config = load_config(agent_config_path)
         else:
-            config = None
-        self.logger = get_logger(config, __name__)
+            self.agent_config = None
+        self.logger = get_logger(self.agent_config, __name__)
         self.wg = wg
         self.tokenizer = tokenizer
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = self.tokenizer.eos_token_id
+        max_model_len = int(config.max_model_len or config.prompt_length + config.response_length)
         self.backend = VerlWgBackend(
-            config=config,
+            config=self.agent_config,
             wg=wg,
             tokenizer=tokenizer,
             logger=self.logger,
+            max_prompt_length=max_model_len - config.response_length
         )
+        self.backend.set_chat_template_defaults(enable_thinking=False)
+        
+        self.sharding_manager = getattr(wg, "rollout_sharding_manager", None)
+        
         tool_registry = ToolRegistry()
         py_tool = PythonExecutionTool()
         tool_registry.register(py_tool)
@@ -144,6 +150,13 @@ class vLLMAgentWrapper:
             self.backend,
             self.tool_registry,
         )
+        
+    def _set_cache(self, flag: bool):
+        if self.sharding_manager:
+            support_cache_op = getattr(self.sharding_manager,"custom_free_cache_engine", None)
+            if isinstance(support_cache_op, bool):
+                setattr(self.sharding_manager,"custom_free_cache_engine",flag)
+                
         
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
         """Generate sequences for a batch of prompts.
@@ -193,10 +206,13 @@ class vLLMAgentWrapper:
         
         timing_generate = {}
         with simple_timer("agent generation", timing_generate):
-        
+            self._set_cache(False)
             plans = self.planner.plan(qa_sequences)
             self.logger.debug("Planning finished, executing subtasks.")
             reports = self.executor.execute(sequences=qa_sequences, plans=plans)
+            
+            self._set_cache(True)
+            
             self.logger.debug("Subtasks ready, preforming final judge.")
             rollouts = [build_rollout_for_model(sequence=seq, plan=plan, report=report, max_chars_per_subtask=2800) for seq, plan, report in zip(qa_sequences,plans,reports)]
 

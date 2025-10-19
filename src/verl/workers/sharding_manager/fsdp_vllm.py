@@ -122,6 +122,8 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         self.base_sync_done: bool = "dummy" not in load_format
         if is_version_ge(pkg="vllm", minver="0.7.3"):
             VLLMHijack.hijack()
+        
+        self.custom_free_cache_engine = True
 
     @GPUMemoryLogger(role="fsdp vllm sharding_manager", logger=logger)
     def __enter__(self):
@@ -207,7 +209,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             params = convert_weight_keys(params, getattr(self.module, "_fsdp_wrapped_module", self.module))
             log_gpu_memory_usage("After state_dict() in sharding manager memory", logger=logger)
 
-            if self.rollout_config.free_cache_engine:
+            if self.rollout_config.free_cache_engine and self._is_sleeping():
                 if "tags" in inspect.signature(self.inference_engine.wake_up).parameters:
                     self.inference_engine.wake_up(tags=["weights"])
                 else:
@@ -224,6 +226,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             if (
                 self.rollout_config.free_cache_engine
                 and "tags" in inspect.signature(self.inference_engine.wake_up).parameters
+                and self._is_sleeping()
             ):
                 self.inference_engine.wake_up(tags=["kv_cache"])
 
@@ -234,9 +237,12 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 self.torch_random_states = get_torch_device().get_rng_state()
                 get_torch_device().set_rng_state(self.gen_random_states)
 
+    def _is_sleeping(self):
+        return self.inference_engine.llm_engine.is_sleeping()
+    
     @GPUMemoryLogger(role="fsdp vllm sharding_manager", logger=logger)
     def __exit__(self, exc_type, exc_value, traceback):
-        if self.rollout_config.free_cache_engine:
+        if self.rollout_config.free_cache_engine and self.custom_free_cache_engine:
             self.inference_engine.sleep(level=1)
 
         self.module.train()

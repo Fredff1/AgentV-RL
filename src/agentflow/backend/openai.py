@@ -8,7 +8,6 @@ from openai import OpenAI
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from agentflow.core.interfaces import CanGenerate,SupportChatTemplate
-from agentflow.core.types import GenerationResult
 from agentflow.utils.log_util import get_logger
 from agentflow.utils.chat_template import is_chat_messages
 
@@ -30,8 +29,8 @@ class OpenaiBackend(CanGenerate):
             base_url=self.openai_config["url"],
         )
         self.max_concurrency = self.openai_config.get("max_concurrency",4)
-    
-    def generate(self, prompts: List, extra: List[Dict] = None, **kwargs) -> Tuple[List[str],List[Dict]]:
+        
+    def _generate(self, prompts: List, extra: List[Dict] = None, **kwargs) -> Tuple[List[str],List[Dict]]:
         """Generate sequences with gievn prompt list
 
         Args:
@@ -63,38 +62,22 @@ class OpenaiBackend(CanGenerate):
                     self.logger.error(e)
                     results[idx]=""
         return results, metas
-        
-    def generate_new(self, prompts: List, extra: List[Dict] = None, **kwargs) -> GenerationResult:
+    
+    def generate(self, prompts: List, extra: List[Dict] = None, **kwargs) -> Tuple[List[str],List[Dict]]:
         """Generate sequences with gievn prompt list
 
         Args:
-            prompts (List): Prompt list of chat messages or raw str. If chat messages are provided, it will automatically apply chat template
+            prompts (List): Prompt list of chat messages or raw str. If raw str are given, they would be wrapped as user prompt for api requests.
             extra (List[Dict], optional): Extra info dicts. Defaults to None.
-            
+
         Returns:
-            GenerationResult: wrapper generation results
+            Tuple[List[str],List[Dict]]: Generated sequences and any metainfo
+                - The metainfo format: {"raw":<full_api_response_object>}
         """
-        results = [""] * len(prompts)
-        metas = [{}] * len(prompts)
-        input_messages = prompts
-        if all([isinstance(prompt,str) for prompt in prompts]):
-            input_messages = [[{"role":"user","content":prompt}] for prompt in prompts]
-        else:
-            assert is_chat_messages(input_messages), "Prompt must be str or chat message"
-        max_worker = min(len(prompts),self.max_concurrency)
-        with ThreadPoolExecutor(max_workers=max_worker) as executor:
-            future_to_idx = {
-                executor.submit(self._request, messages): idx
-                for idx, messages in enumerate(input_messages)
-            }
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    results[idx], metas[idx] = future.result()
-                except Exception as e:
-                    self.logger.error(e)
-                    results[idx]=""
-        return GenerationResult.from_legacy(results,metas,{})
+        return self._generate(prompts, extra, **kwargs)
+        
+        
+  
         
     def _request(self, messages):
         args = {
