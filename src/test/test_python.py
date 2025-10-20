@@ -11,7 +11,7 @@ from agentflow.tools.code.python_execution import PythonExecutionTool
 from agentflow.tools.base import ToolCallRequest
 
 def test_python_tool_print_basic():
-    tool = PythonExecutionTool(timeout_length=5)
+    tool = PythonExecutionTool(timeout_length=5,use_proc=False)
     request = ToolCallRequest(
         index=0,
         name="search",

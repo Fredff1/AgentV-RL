@@ -181,8 +181,6 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
 
         response_texts = [t for t, keep in zip(response_texts_all, keep_mask) if keep]
         
-        for t_idx, t in enumerate(response_texts):
-            print(f"{t_idx} of the batch: \n{t}")
 
         metas = [{"raw_output": output_proto, "prompt": p, "padded_size":padded_size, "original_size":original_n} for p in (raw_prompts[:original_n])]
 

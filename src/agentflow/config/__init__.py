@@ -26,6 +26,7 @@ vllm_config={
     "tensor_parallel_size":1,
     "stop_tokens":[],
     "use_tqdm":True,
+    "enable_sleep_mode":True,
 }
 
 openai_config={

@@ -2,24 +2,26 @@
 logging:                               # 日志相关配置
   level: "DEBUG"                       # 日志级别：DEBUG/INFO/WARNING/ERROR/CRITICAL（也可用数字 10/20/...）
   log_to_file: true                    # 是否写入文件
-  log_file_dir: "/root/workspace/agent-rm/Agentic-Reward/config"  # 日志目录（需可写）
+  log_file_dir: "/root/workspace/agent-rm/log"  # 日志目录（需可写）
   log_file_name: "default.log"         # 日志文件名
 
 backend:                                # 推理后端与采样参数
-  model_path: "/root/workspace/agent-rm/models/reward/internlm2-7b-reward"                        # 模型权重路径或服务名称（如本地HF路径/仓库名/远端模型名）
+  model_path: ""                        # 模型权重路径或服务名称（如本地HF路径/仓库名/远端模型名）
   dtype: "auto"                         # 张量精度：auto/float32/bfloat16/float16 等
   sampling:                             # 统一的采样参数（被不同后端共用）
-    temperature: 1                      # 温度，>1 更发散，=0 近似贪心
-    max_tokens: 1024                    # 最多生成的 token 数
+    temperature: 0.6                      # 温度，>1 更发散，=0 近似贪心
+    max_tokens: 2048                    # 最多生成的 token 数
     top_p: 1.0                          # nucleus sampling 截断阈值（0~1）
     top_k: 20                           # 只在前 K 个候选中采样（<=0 表示不启用）
+    repetition_penalty: 1.0
   vllm:                                 # vLLM 专属配置（仅在使用 vLLM 时生效）
-    gpu_memory_utilization: 0.6         # 单卡显存利用率上限（0~1 之间）
-    tensor_parallel_size: 1             # 张量并行大小（=GPU 数或其因数）
+    gpu_memory_utilization: 0.55         # 单卡显存利用率上限（0~1 之间）
+    tensor_parallel_size: 2             # 张量并行大小（=GPU 数或其因数）
     stop_tokens:
       - "</answer>"
-    use_tqdm: true
-    enable_sleep_mode: false
+      - "</python>"
+      - "</next>"
+    use_tqdm: false
   openai:                               # OpenAI/兼容接口配置（仅在使用 OpenAI 风格后端时生效）
     api_key: "sk-xxx"                   # API Key（务必用环境变量或密钥管理）
     url: ""                             # 自定义 Base URL（如走兼容网关时设置；官方可留空）
@@ -32,8 +34,8 @@ backend:                                # 推理后端与采样参数
     positive_class_index: 0
     clip_range:
       - 0
-      - 100.0
+      - 1.0
     batch_size: null
   hf:
-    device: 1
+    device: 0
     torch_dtype: "auto"

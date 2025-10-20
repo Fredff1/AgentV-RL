@@ -4,6 +4,7 @@ from tqdm import tqdm
 
 from agentflow.core.interfaces import CanGenerate, CanRMScores, CanChoiceProbs, SupportChatTemplate
 from agentflow.utils.tag_util import find_tags
+from agentflow.utils.vllm import SupportVllm, free_cache
 
 
 class SupportLogitsScore(CanGenerate,CanChoiceProbs):
@@ -91,7 +92,11 @@ Your judgement:
                 prefix_text = "Mock"
                 invalid_idxs.append(idx)
             prefixes.append(prefix_text)
-        probs = self._batched_choice_probs(prefixes,self.choice_labels)
+        if isinstance(self.generator, SupportVllm):
+            with free_cache(self.generator, level=1):
+                probs = self._batched_choice_probs(prefixes,self.choice_labels)
+        else:
+            probs = self._batched_choice_probs(prefixes,self.choice_labels)
         results: List[float] = []
         for idx, prob in enumerate(probs):
             if idx in invalid_idxs:

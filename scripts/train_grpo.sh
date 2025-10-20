@@ -3,7 +3,7 @@ set -x
 export WANDB_MODE=offline
 export WANDB_DIR=/root/workspace/agent-rm/wandb
 
-export CUDA_VISIBLE_DEVICES=1,2,3,5
+export CUDA_VISIBLE_DEVICES=5,6
 export RAY_TEMP_DIR=/mnt/data/ray_temp
 export NCCL_TIMEOUT=3600  
 export HYDRA_FULL_ERROR=1
@@ -18,7 +18,7 @@ echo "PYTHONPATH = $PYTHONPATH"
 
 
 
-PROJECT_NAME=rm_grpo_1019 # project name
+PROJECT_NAME=rm_grpo_1020 # project name
 EXP_NAME=grpo-2000-qwen3-4b-test-1 # exp name
 
 ACTOR_MODEL_PATH=/root/workspace/agent-rm/models/qwen3-4b
@@ -36,13 +36,13 @@ CONFIG_NAME=grpo_verifier # verl config name
 REWAED_FN_PATH=${SRC_DIR}/verl/utils/reward_score/agent_verifier.py
 AGENT_CONFIG_PATH=/root/workspace/agent-rm/Agent-Verifier/config/train_grpo.yaml
 
-n_gpus_per_node=4
+n_gpus_per_node=2
 nnodes=1
 
 
 ray stop
 ray start --head \
-    --num-gpus=4 \
+    --num-gpus=2 \
     --plasma-directory=/tmp/ray_plasma \
     --object-store-memory=274877906944
 

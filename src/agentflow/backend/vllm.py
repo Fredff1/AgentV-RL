@@ -35,6 +35,7 @@ class VllmBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate):
             gpu_memory_utilization=self.vllm_config.get("gpu_memory_utilization",0.8),
             tensor_parallel_size=self.vllm_config["tensor_parallel_size"],
             trust_remote_code=True,
+            enable_sleep_mode=self.vllm_config.get("enable_sleep_mode",False),
         )
         
         self.tokenizer = self.vllm.get_tokenizer()

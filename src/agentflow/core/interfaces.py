@@ -49,6 +49,7 @@ class SupportChatTemplate(Protocol):
         """
         ...
 
+@runtime_checkable
 class CanGenerate(Protocol):
     """Protocol for a component that can generate text completions for the given prompts.
     Implementations may support both raw strings and chat-rendered strings as input.

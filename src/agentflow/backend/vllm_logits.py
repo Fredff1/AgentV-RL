@@ -8,6 +8,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from agentflow.utils.log_util import get_logger
+from agentflow.utils.vllm import free_cache
 from agentflow.utils.chat_template import is_chat_messages, safe_apply_chat_template, ChatTemplateDefaultsMixin, left_truncate_text_by_token, resolve_context_window_len
 from agentflow.core.interfaces import CanGenerate, CanChoiceProbs,SupportChatTemplate
 
@@ -37,6 +38,7 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
             gpu_memory_utilization=self.vllm_config.get("gpu_memory_utilization", 0.85),
             tensor_parallel_size=self.vllm_config.get("tensor_parallel_size", 1),
             trust_remote_code=True,
+            enable_sleep_mode=self.vllm_config.get("enable_sleep_mode",False),
         )
 
         hf_dtype = self.hf_config.get("torch_dtype", "auto")
@@ -121,10 +123,20 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
         return texts, metas
 
 
-    
+    def choice_probs(self,
+                    prefixes: Sequence[str],
+                    choices: Sequence[Sequence[str]],
+                    normalize: str = "sum"  
+                    ) -> List[List[float]]:
+        probs = self._choice_probs(
+            prefixes=prefixes,
+            choices=choices,
+            normalize=normalize,
+        )
+        return probs
     
     @torch.inference_mode()
-    def choice_probs(self,
+    def _choice_probs(self,
                     prefixes: Sequence[str],
                     choices: Sequence[Sequence[str]],
                     normalize: str = "sum"  

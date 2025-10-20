@@ -88,7 +88,7 @@ class PlanSubtaskAgent(CanRMScores):
         self.executor = VerificationSubtaskExecutor(
             backend=backend,
             registry=registry,
-            config=ExecutorConfig(enable_early_stop=False)
+            config=ExecutorConfig(enable_early_stop=False,use_tqdm = True)
         )
         self.scorer = BoolLogitsGenerativeScorer(
             generator=backend,
@@ -96,6 +96,8 @@ class PlanSubtaskAgent(CanRMScores):
             system_prompt=final_system_prompt or SYSTEM_PROMPT,
             user_prompt=final_user_prompt or USER_PROMPT,
         )
+        
+        self.logger = get_logger(name = __name__)
         
         self.agent = self.executor.agent
         
@@ -107,14 +109,18 @@ class PlanSubtaskAgent(CanRMScores):
         **kwargs
     ) -> Tuple[List[float],List[Dict]]: 
         try:
+            
             plans = self.planner.plan(sequences)
+            self.logger.info(f"Planning finished.")
             reports = self.executor.execute(sequences=sequences,plans=plans)
+            self.logger.info("Execution finished.")
             results = integrate_and_predict(
                 sequences=sequences,
                 plans=plans,
                 reports=reports,
                 scorer=self.scorer,
             )
+            self.logger.info("Final prediction finished.")
             scores = [0] * len(sequences)
             metas = [{} for _ in range(len(sequences))] 
             for idx, result in enumerate(results):

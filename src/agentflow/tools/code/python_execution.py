@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional
 from dataclasses import asdict
 
 from agentflow.tools.base import BaseTool, ToolCallRequest, ToolCallResult
-from agentflow.tools.code.sandbox.python_executor import PythonExecutor, ExecPlan
+from agentflow.tools.code.sandbox.python_executor import PythonExecutor
+from agentflow.tools.code.sandbox.python_executor_no_proc import PythonExecutorNoProc
+from agentflow.tools.code.sandbox.execution_plan import ExecPlan
 from agentflow.tools.code.sandbox.python_sandbox import SandboxConfig
 
 class PythonExecutionTool(BaseTool):
@@ -25,7 +27,9 @@ class PythonExecutionTool(BaseTool):
                  headers: Optional[List[str]] = None,
                  context: Optional[Dict[str, Any]] = None,
                  helper_modules: Optional[List[Dict[str, Any]]] = None,
-                 helpers: Optional[Dict[str, Any]] = None):
+                 helpers: Optional[Dict[str, Any]] = None,
+                 use_proc: bool = False
+        ):
         super().__init__(config=config, max_rounds=max_rounds)
 
         sconf = SandboxConfig(
@@ -34,7 +38,11 @@ class PythonExecutionTool(BaseTool):
             allowed_imports=allowed_imports,
             truncate_len=int(truncate_len),
         )
-        self.executor = PythonExecutor(config=sconf)
+        self.use_proc = use_proc
+        if use_proc:
+            self.executor = PythonExecutor(config=sconf)
+        else:
+            self.executor = PythonExecutorNoProc(config=sconf)
         if headers: 
             self.executor.set_headers(headers)
         if context: 
@@ -107,7 +115,7 @@ class PythonExecutionTool(BaseTool):
                                       capture_mode=meta.get("capture_mode", "stdout"),
                                       answer_symbol=meta.get("answer_symbol"),
                                       answer_expr=meta.get("answer_expr")))
-            results = self.executor.run_many(plans, show_progress=len(plans)>100)
+            results = self.executor.run_many(plans, show_progress=True)
             packed: List[ToolCallResult] = []
             for res, c in zip(results, allowed_calls):
                 out = f"Console: {res.stdout}\nResult: {res.result}"

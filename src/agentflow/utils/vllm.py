@@ -2,14 +2,11 @@ from __future__ import annotations
 from typing import List, Dict, Optional, Union, Protocol, runtime_checkable
 from contextlib import contextmanager
 import inspect
-
+import torch
 
 from vllm import LLM, SamplingParams
 
-from agentflow.backend.vllm import VllmBackend, VllmInjectionBackend
-from agentflow.backend.vllm_logits import VllmChoiceLogitsBackend
 
-UseVllmBackend = Union[VllmBackend, VllmInjectionBackend, VllmChoiceLogitsBackend]
 
 @runtime_checkable
 class SupportVllm(Protocol):
@@ -21,12 +18,22 @@ def _is_sleeping(llm: LLM):
     return llm.llm_engine.is_sleeping()
         
 @contextmanager
-def free_cache(backend: UseVllmBackend, level: int = 1):
-    backend: SupportVllm
+def free_cache(backend, level: int = 1):
+    """Free memory of a vllm-backend for other usage.
+
+    Args:
+        backend (UseVllmBackend): Any backend based on vllm.
+        level (int, optional): The sleep level of vllm engine . Defaults to 1.
+    """
+    assert isinstance(backend, SupportVllm), "backend must be vllm-based to use free cache engine"
     llm = backend.get_vllm_instance()
     if not _is_sleeping(llm):
         llm.sleep(level)
-    yield
+        torch.cuda.empty_cache()
+    try:
+        yield
+    finally:
+        llm.wake_up(tags = ["weights","kv_cache"])
     
         
     

@@ -2,10 +2,7 @@ import ast
 import copy
 import io
 import os
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
 
 import pickle
 import re
@@ -60,7 +57,7 @@ def _ast_guard_imports(text: str, allowed: Optional[set]) -> None:
 @dataclass
 class SandboxConfig:
     time_limit_s: float = 5.0
-    mem_limit_mb: int = 4
+    mem_limit_mb: int = 128
     allowed_imports: Optional[List[str]] = field(default_factory=lambda: sorted(ALLOWED_IMPORTS_DEFAULT))
     capture_stdout: bool = True
     seed: Optional[int] = 0
@@ -80,7 +77,8 @@ class SandboxRuntime:
                  config: SandboxConfig,
                  headers: Optional[List[str]] = None,
                  context: Optional[Dict[str, Any]] = None,
-                 helpers: Optional[Dict[str, Any]] = None):
+                 helpers: Optional[Dict[str, Any]] = None,
+    ):
         self.config = config
         self._globals: Dict[str, Any] = {}
         self._init_prelude()
@@ -171,10 +169,13 @@ def _run_in_sandbox(code: str,
                     config: SandboxConfig,
                     headers: List[str],
                     context: Dict[str, Any],
-                    helpers: Dict[str, Any]) -> ExecutionResult:
+                    helpers: Dict[str, Any],
+                    limit_resource: bool = False
+                    ) -> ExecutionResult:
     start = time.time()
     try:
-        _apply_resource_limits(config.mem_limit_mb)
+        if limit_resource:
+            _apply_resource_limits(config.mem_limit_mb)
         if config.seed is not None:
             try:
                 import random, numpy as _np

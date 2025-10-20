@@ -5,26 +5,23 @@ from typing import Any, Dict, List, Optional, Tuple
 from pebble import ProcessPool
 from concurrent.futures import TimeoutError as PebbleTimeoutError
 from functools import partial
+from multiprocessing import get_context
 from tqdm import tqdm
 
 from .python_sandbox import (
     SandboxConfig, SandboxRuntime,
     ExecutionResult, _run_in_sandbox
 )
+from .execution_plan import ExecPlan
 
-@dataclass
-class ExecPlan:
-    code: str
-    capture_mode: str = "stdout"    
-    answer_symbol: Optional[str] = None
-    answer_expr: Optional[str] = None
+
 
 class PythonExecutor:
     def __init__(self,
                  config: Optional[SandboxConfig] = None,
                  max_workers: Optional[int] = None):
         self.config = config or SandboxConfig()
-        self.max_workers = max_workers or os.cpu_count() or 2
+        self.max_workers = max_workers or 2
         self._headers: List[str] = []
         self._context: Dict[str, Any] = {}
         self._helpers: Dict[str, Any] = {}
@@ -54,7 +51,8 @@ class PythonExecutor:
         self._helpers.update(helpers)
 
     def run(self, plan: ExecPlan) -> ExecutionResult:
-        with ProcessPool(max_workers=1,max_tasks=1) as pool:
+        ctx = get_context("spawn")
+        with ProcessPool(max_workers=1, max_tasks=1, context = ctx) as pool:
             fn = partial(_run_in_sandbox,
                          code=plan.code,
                          capture_mode=plan.capture_mode,
@@ -76,12 +74,14 @@ class PythonExecutor:
         if not plans:
             return []
         outs: List[ExecutionResult] = [None] * len(plans)
-        with ProcessPool(max_workers=min(self.max_workers, len(plans))) as pool:
+        ctx = get_context("spawn")
+        with ProcessPool(max_workers=min(self.max_workers, len(plans)), context=ctx) as pool:
             fn_base = partial(_run_in_sandbox,
                          config=self.config,
                          headers=self._headers+self._helper_code,
                          context=self._context,
-                         helpers=self._helpers)
+                         helpers=self._helpers,
+                         limit_resource = True)
             futures: List[Tuple[int, Any]] = []
             for idx, p in enumerate(plans):
                 try:
@@ -101,7 +101,7 @@ class PythonExecutor:
                         duration_s=None
                     )
 
-            use_pbar = show_progress and len(plans) > 50
+            use_pbar = show_progress
             pbar = tqdm(total=len(plans), desc="Execute") if use_pbar else None
 
             for idx, fut in futures:
