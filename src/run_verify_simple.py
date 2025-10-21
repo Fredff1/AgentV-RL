@@ -15,30 +15,86 @@ from agentflow.config import load_config
 from agentflow.backend.vllm_logits import VllmChoiceLogitsBackend
 from agentflow.tools.registry import ToolRegistry
 from agentflow.tools.code.python_execution import PythonExecutionTool
-from agentflow.agent.plan import PlanSubtaskAgent
+from agentflow.agent.plan import PlanSubtaskSingleAgent
 from agentflow.utils.json_util import JsonUtil
 from agentflow.utils.log_util import get_logger
 
-SYSTEM_PROMPT = """
-You are a strict verifier-judge responsible for evaluating the solution to a given problem. You will receive a evaluation rollout, which includes the overall evalution plan, individual evalution subtasks, and their corresponding executions. Your task is to rigorously assess the solution by identifying any issues that may arise during the execution of these subtasks. This includes checking for cross-step logical inconsistencies, verifying the alignment of the solution with the required conditions, and ensuring the proper form and consistency throughout the entire solution process.
+SYSTEM_PROMPT = """you control a 3-stage xml-based verification workflow. every assistant message must be valid xml and fully closed.  
+no markdown, no prose outside xml. lowercase all tags.
 
-Write a brief <review> in plain prose. Cover only what matters:
-- Consistency: list all candidate values/expressions for the asked quantity you find; say whether the rollout itself proves them equivalent (cite subtask ids like s2, s4).
-- Bridge: is there a clear chain from premises to the final claim (evidence_alignment or equivalent)? Point out any missing link or leap.
-- Type/Form: does the final claim match the required type/range/form stated in the asked_quantity?
-- Scope: are there hidden assumptions not listed under assumptions_required?
+=== global rules ===
+- each round outputs one complete top-level block:
+  • stage 1 → <plan>...</plan>  
+  • stage 2 → <subtask>...</subtask>  
+  • stage 3 → <review>...</review><answer>...</answer>  
+- never leave tags open across turns.
+- reasoning and tool calls happen only inside <think> or <python>.
+- total flow: plan → multiple subtasks → review+answer (termination).
 
-Keep the review compact, factual, and cite subtask ids when referencing steps. Do not explain tools or re-derive math; judge only what’s inside the rollout.
+=== stage 1 : planning ===
+role: verification planner.
+goal: decompose the verification problem into 4–7 atomic, falsifiable validation units.
+each unit = one binary-check step.
 
-After </review>, output EXACTLY one tag: <answer>true</answer> OR <answer>false</answer>.
+<plan> inner json schema:
+{
+ "problem_statement": "formal restatement",
+ "target_quantity": "value or entity under verification",
+ "required_assumptions": ["..."],
+ "verification_units": [
+   {
+     "id": "u1",
+     "title": "concise name",
+     "category": "intent_validation | premise_verification | evidence_alignment | numeric_validation | final_consistency | ...",
+     "tool_spec": {"python": false, "search": false, "max_calls": 1},
+     "stop_on_failure": true
+   }
+ ],
+ "termination_conditions": ["must_pass:u2","must_pass:u3","must_pass:final"]
+}
+output only <plan>…</plan> with valid json inside. nothing else.
 
-Decision rule: if any of the above checks fails (inconsistency, missing bridge, wrong type/form, hidden assumptions), answer <answer>false</answer>; otherwise answer <answer>true</answer>.
+=== stage 2 : subtask execution ===
+role: tool-augmented verifier.
+for each unit, solve and judge it end-to-end in one <subtask>…</subtask> block.
 
-Formatting: output ONLY <review>...</review><answer>...</answer>. Lowercase only. No extra text, no code fences.
+allowed tags inside <subtask>…</subtask>:
+- <rubric>…</rubric> : 2–4 axes for evaluation.
+- <think>…</think> : reasoning step (may appear multiple times).
+- <python>…</python> : code, print(...) only, math/sympy allowed, ≤3 per subtask.
+- <verify>…</verify> : ≤300 words reviewing the sub-goal only.
+- <answer>true|false</answer> : exactly once, final tag.
+
+interaction:
+1. begin with <rubric>.
+2. perform one or more <think> (with optional <python> blocks).
+3. conclude with <verify><answer>.
+4. keep each <subtask> standalone and fully closed.
+
+example format:
+<subtask>
+<rubric>…</rubric><think>…</think><python>…</python>(optional, may not appear)
+<think>…</think><verify>…</verify><answer>true|false</answer>
+</subtask>
+
+=== stage 3 : final judgment ===
+role: strict verifier-judge.
+given the full rollout (plan + subtasks), output only:
+<review>
+- consistency: list candidate results for asked quantity; note if rollout proves them equivalent.
+- bridge: confirm reasoning chain from premises → final claim; note missing links.
+- type/form: check final claim vs asked_quantity.
+- scope: hidden assumptions not in required_assumptions.
+</review>
+<answer>true|false</answer>
 """
 
-USER_PROMPT = """
-The question, answer and agent's rollout:
+USER_PROMPT = """The problem, proposed solution, and prior rollout are below as {sequence}.
+
+your task:
+- first output <plan>…</plan> (stage 1).
+- then, for each validation unit, output one <subtask>…</subtask> per turn until all are done.
+- finally, output <review>…</review><answer>…</answer> (stage 3).
 {sequence}
 """
 
@@ -95,13 +151,14 @@ class JudgeWorker:
         backend = VllmChoiceLogitsBackend(config)
         backend.set_chat_template_defaults(enable_thinking=False)
         reg = ToolRegistry()
-        reg.register(PythonExecutionTool())
-        self.agent = PlanSubtaskAgent(
+        reg.register(PythonExecutionTool(max_rounds=15))
+        self.agent = PlanSubtaskSingleAgent(
             backend=backend,
             prob_calculator=backend,
             tool_registry=reg,
-            final_user_prompt=user_prompt,
-            final_system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            max_rounds=36,
         )
 
     def score_batch(self, payload: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -217,14 +274,11 @@ def main():
             logger.info(f"Submitted batch to worker#{wid}, size={len(payload)}")
 
         while inflight:
-            # 等一个完成
             ready, rest = ray.wait([obj for (_, obj, _) in inflight], num_returns=1, timeout=None)
             obj_done = ready[0]
-            # 找回对应条目
             i = next(k for k, (_, o, _) in enumerate(inflight) if o == obj_done)
             wid, _, blocks = inflight.pop(i)
 
-            # 取结果并写出（小组就地写）
             items = ray.get(obj_done)  # List[{"scores":..., "metas":..., "count":...}]
             for blk, item in zip(blocks, items):
                 L = int(item["count"])
@@ -234,7 +288,6 @@ def main():
                 if "idx" not in blk_out.keys():
                     blk_out["idx"]=10000
 
-                # evaluations 初始化：避免 [{}]*L 引用同一对象
                 evaluations: List[Dict[str, Any]] = blk_out.get("evaluations") or [dict() for _ in range(L)]
                 for eva, meta, score in zip(evaluations, metas, scores):
                     eva["judge"] = meta.get("judge")

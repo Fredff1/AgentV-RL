@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Any, Sequence, Callable
+from typing import List, Tuple, Dict, Any, Sequence, Callable, Optional
 
 from tqdm import tqdm
 
@@ -35,6 +35,7 @@ Your judgement:
         prob_bs: int = 1,
         choice_labels: Sequence[str] = ("true", "false"), 
         eps: float = 1e-15,   
+        chat_template_backend: Optional[SupportChatTemplate] = None,
     ):
         super().__init__()
         self.generator = generator
@@ -44,6 +45,10 @@ Your judgement:
         self.prob_bs = max(1, int(prob_bs))
         self.choice_labels = tuple(choice_labels)
         self.eps = eps
+        if chat_template_backend:
+            self.chat_template_backend = chat_template_backend
+        else:
+            self.chat_template_backend = generator
         
         
     def _chunk(self, xs: Sequence[Any], n: int):
@@ -76,9 +81,11 @@ Your judgement:
         ]
         
         try:
-            input_texts = self.generator.apply_chat_template(msg_list)
+            input_texts = self.chat_template_backend.apply_chat_template(msg_list)
+            if isinstance(input_texts,str):
+                input_texts = [input_texts]
         except:
-            input_texts = ""
+            input_texts = ["" for _ in range(len(sequences))]
         
         outputs, metas = self.generator.generate(msg_list,extra)
         prefixes = []

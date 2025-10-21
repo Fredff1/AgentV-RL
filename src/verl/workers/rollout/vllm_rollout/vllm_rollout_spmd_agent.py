@@ -319,6 +319,7 @@ class vLLMAgentMultiTurnWrapper:
         self.tool_registry = tool_registry
         self.planner = LLMPlanner(
             self.backend,
+            max_num_subtasks=None,
         )
         self.executor = VerificationSubtaskExecutor(
             self.backend,

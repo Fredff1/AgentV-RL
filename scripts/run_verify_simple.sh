@@ -5,12 +5,12 @@ NUM_WORKERS=4
 
 TASK_NAME=qwen2.5-7b-math-bon128-gaokao-2023-eval
 
-EXP_NAME=qwen2.5-7b-eval-1
+EXP_NAME=qwen2.5-7b-eval-simple-1
 
 # ray stop
 
-python /root/workspace/agent-rm/Agent-Verifier/src/run_verify.py \
-  --config /root/workspace/agent-rm/Agent-Verifier/config/distrubute_verify.yaml \
+python /root/workspace/agent-rm/Agent-Verifier/src/run_verify_simple.py \
+  --config /root/workspace/agent-rm/Agent-Verifier/config/distrubute_verify_simple.yaml \
   --input  /root/workspace/agent-rm/datasets/gaokao2023/bon/qwen2.5-7b-math-bon128-gaokao-2023.jsonl \
   --output /root/workspace/agent-rm/datasets/gaokao2023/1021/${TASK_NAME}-${EXP_NAME}.jsonl \
   --model_path /root/workspace/agent-rm/models/Qwen-2.5-7B-Instruct \

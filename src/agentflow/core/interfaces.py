@@ -13,7 +13,7 @@ class SupportChatTemplate(Protocol):
     """
     def apply_chat_template(self, messages: Union[List[Dict[str,str]],List[List[Dict[str,str]]]], 
                             tokenize=False, add_generation_prompt=True, **additional_params
-        ) -> Union[str,Any]:
+        ) -> Union[str, Any, List[str]]:
         """
         Args:
             messages (Union[List[Dict[str,str]]): Standard chat messages or list of chat messages

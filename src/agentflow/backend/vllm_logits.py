@@ -55,7 +55,7 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
     def apply_chat_template(self, messages: List[List[Dict[str,str]]], 
                             tokenize=False, 
                             add_generation_prompt=True, 
-                            **additional_params) -> Union[str,Any]:
+                            **additional_params) -> Union[str, Any, List[str]]:
         merged = self._merge_for_call(additional_params)
         result, _ = safe_apply_chat_template(
             self.tokenizer,

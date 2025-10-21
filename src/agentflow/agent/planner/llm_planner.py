@@ -79,7 +79,7 @@ class JsonPlanParser:
     REQUIRED_SUB = ["id", "title", "justification", "category", "expected_output", "stop_on_failure"]
 
     @classmethod
-    def _inject_fixed_subtasks(cls, obj: Dict[str, Any]) -> None:
+    def _inject_fixed_subtasks(cls, obj: Dict[str, Any], max_num_subtasks: Optional[int] = None) -> None:
         """Append fixed subtasks if missing. The order is: self_solve -> overall."""
         ids = {st.get("id", "") for st in obj["verification_units"] if isinstance(st, dict)}
         assert isinstance(obj["verification_units"],list)
@@ -88,9 +88,11 @@ class JsonPlanParser:
         ids.add(FIXED_SELF_SOLVE_SUBTASK["id"])
         if FIXED_OVERALL_SUBTASK["id"] not in ids:
             obj["verification_units"].insert(0, dict(FIXED_OVERALL_SUBTASK))
+        if max_num_subtasks and isinstance(max_num_subtasks, int):
+            obj["verification_units"] = obj["verification_units"][:max_num_subtasks]
 
     @classmethod
-    def validate_and_coerce(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_and_coerce(cls, obj: Dict[str, Any], max_num_subtasks: Optional[int] = None) -> Dict[str, Any]:
         for k in cls.REQUIRED_TOP:
             obj.setdefault(k, "" if k in ["problem_statement","target_quantity"] else ([] if k!="verification_units" else []))
         if not isinstance(obj["required_assumptions"], list):
@@ -111,7 +113,7 @@ class JsonPlanParser:
             fixed.append(st)
         obj["verification_units"] = fixed
         
-        cls._inject_fixed_subtasks(obj)
+        cls._inject_fixed_subtasks(obj, max_num_subtasks=max_num_subtasks)
 
         obj.setdefault("termination_conditions", [
             "target_quantity mismatch confirmed",
@@ -147,10 +149,17 @@ class JsonPlanParser:
 
 
 class LLMPlanner(BasePlanner):
-    def __init__(self, backend: CanGenerate, system_prompt: Optional[str]=None, * ,max_retries: int = 3):
+    def __init__(self, 
+                 backend: CanGenerate, 
+                 system_prompt: Optional[str]=None, 
+                 * ,
+                 max_retries: int = 3,
+                 max_num_subtasks: Optional[int] = None
+        ):
         self.backend = backend
         self.system_prompt = system_prompt or PLANNER_SYSTEM
         self.max_retries = max_retries
+        self.max_num_subtasks = max_num_subtasks
     
 
     def _build_prompt(self, sequence: str, strengthen_format: bool=False) -> List[Dict[str, str]]:
@@ -180,7 +189,7 @@ class LLMPlanner(BasePlanner):
         return obj
 
     def _coerce_to_plan(self, obj: Dict[str, Any]) -> Plan:
-        coerced = JsonPlanParser.validate_and_coerce(obj)
+        coerced = JsonPlanParser.validate_and_coerce(obj, max_num_subtasks=self.max_num_subtasks)
         return JsonPlanParser.to_plan(coerced)
 
     def plan(self, sequences: List[str], extra: Optional[List[Dict[str,Any]]] = None, **kwargs) -> List[Plan]:

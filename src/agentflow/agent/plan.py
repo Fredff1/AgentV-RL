@@ -13,13 +13,14 @@ from agentflow.tools.base import ToolCallResult
 from agentflow.tools.code.python_execution import PythonExecutionTool
 from agentflow.tools.registry import ToolRegistry
 from agentflow.tools.caller import ToolCaller       
-from agentflow.tools.base import ToolParser      
+from agentflow.tools.parser import TagToolParser
+from agentflow.agent.basic import ToolDrivenAgent
 from agentflow.agent.planner.llm_planner import LLMPlanner
 from agentflow.agent.executor.executor import VerificationSubtaskExecutor, simple_aggregate_verdict, ExecutorConfig
 from agentflow.agent.executor.integrator import integrate_and_predict, stats_and_has_fail, build_rollout_for_model, point_wise_score
 from agentflow.utils.chat_template import is_chat_messages   
 from agentflow.utils.log_util import get_logger
-
+from agentflow.utils.tag_util import find_tags
 
 SYSTEM_PROMPT = """
 You are a deterministic judge. You will receive a single rollout text that summarizes a verification agent’s plan,
@@ -67,7 +68,15 @@ The question, answer and agent's rollout:
 
 """
 
-
+def _to_bool(text: str) -> Optional[bool]:
+    if text is None:
+        return None
+    s = str(text).strip().lower()
+    if s == "true":
+        return True
+    if s == "false":
+        return False
+    return None
 
 class PlanSubtaskAgent(CanRMScores):
     
@@ -136,6 +145,77 @@ class PlanSubtaskAgent(CanRMScores):
             metas = [{"raw_text":"","judge":None} for _ in range(len(sequences))] 
             traceback.print_exc()
             return scores, metas
+        
+class PlanSubtaskSingleAgent(CanRMScores):
+    
+    def __init__(
+        self,
+        backend: CanGenerate,
+        prob_calculator: CanChoiceProbs,
+        tool_registry: Optional[ToolRegistry] = None,
+        system_prompt: Optional[str] = None,
+        user_prompt: Optional[str] = None,
+        max_rounds: int = 48,
+    ):
+        super().__init__()
+        self.backend = backend
+        
+        registry = tool_registry or ToolRegistry()
+        py_tool = PythonExecutionTool()
+        registry.register(py_tool)
+        caller = ToolCaller(registry, parser=TagToolParser())
+        self.agent = ToolDrivenAgent(
+            backend=backend,
+            tool_caller=caller,
+            finish_fn=self._has_final,
+            max_rounds=max_rounds
+        )
+        self.scorer = BoolLogitsGenerativeScorer(
+            generator=self.agent,
+            prob_calculator=prob_calculator,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+
+    
+    
+    def _has_final(self, context: AgentContext) -> bool:
+        last_msg = context.last_message()
+        end_of_verify = find_tags(last_msg.content, ["end_of_verification"])
+        if end_of_verify:
+            return True
+        # else:
+        #     return False
+        review_tags = find_tags(last_msg.content, ["review"])
+        answer_tags = find_tags(last_msg.content, ["answer"])
+        if not review_tags or not answer_tags:
+            return False
+        last_answer = answer_tags[-1]
+        last_subtask = review_tags[-1]
+        if last_answer.end <= last_subtask.start:
+            return False
+        if last_answer.body.lower() in ("true","false"):
+            return True
+        return False
+    
+    def score(
+        self, 
+        sequences: Sequence[str], 
+        extra: List[Dict] = None, 
+        **kwargs
+    ) -> Tuple[List[float],List[Dict]]: 
+        scores, metas = self.scorer.score(sequences, extra, **kwargs)
+        for score, meta in zip(scores, metas):
+            raw_text = meta["raw_text"]
+            verdict = False
+            answer_tags = find_tags(raw_text,["answer"])
+            if answer_tags:
+                verdict = _to_bool(answer_tags[-1].body)
+            meta["judge"]=verdict
+                
+        return scores, metas
+    
+
         
 
 class PlanSubtaskMultiheadAgent(CanRMScores):
@@ -221,65 +301,3 @@ class PlanSubtaskMultiheadAgent(CanRMScores):
             return scores, metas
 
         
-class RulePlanSubtaskAgent(CanRMScores):
-    """直接根据规则得到正确率以及分数
-
-    Args:
-        CanRMScores (_type_): _description_
-    """
-    def __init__(
-        self,
-        backend: CanGenerate,
-        tool_registry: Optional[ToolRegistry] = None,
-        logger: Optional[logging.Logger] = None
-    ):
-        super().__init__()
-        self.backend = backend
-        self.planner = LLMPlanner(backend)
-        registry = tool_registry or ToolRegistry()
-        py_tool = PythonExecutionTool()
-        registry.register(py_tool)
-        self.executor = VerificationSubtaskExecutor(
-            backend=backend,
-            registry=registry,
-        )
-        self.logger = logger
-    
-        
-    
-    def score(
-        self, 
-        sequences: Sequence[str], 
-        extra: List[Dict] = None, 
-        **kwargs
-    ) -> Tuple[List[float],List[Dict]]: 
-        try:
-            plans = self.planner.plan(sequences)
-            reports = self.executor.execute(sequences=sequences,plans=plans)
-            
-            scores = [0] * len(sequences)
-            metas = [{} for _ in range(len(sequences))] 
-            for idx, (seq, plan,report) in enumerate(zip(sequences, plans, reports)):
-                stats, has_fail = stats_and_has_fail(report)
-                rolout = build_rollout_for_model(sequence=seq,plan=plan,report=report)
-                if has_fail:
-                    num_corr = stats.get("passed",0)
-                    score = 0
-                    if num_corr > 0:
-                        score = min(0.5,num_corr * 0.1)
-                    verdict = False
-                else:
-                    score = 1
-                    verdict = True
-                scores[idx]=score
-                metas[idx]["raw_text"]=rolout
-                metas[idx]["plan"]=plan
-                metas[idx]["subtask_reports"]=report
-                metas[idx]["final_result"]=stats
-                metas[idx]["judge"]=verdict
-            return scores, metas
-        except Exception as e:
-            scores = [-1] * len(sequences)
-            metas = [{"raw_text":"","judge":None} for _ in range(len(sequences))] 
-            traceback.print_exc()
-            return scores, metas

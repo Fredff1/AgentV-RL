@@ -216,6 +216,7 @@ records/**
 !/config/train.yaml
 !/config/train_grpo_local.yaml
 !/config/distrubute_verify.yaml
+!/config/distrubute_verify_simple.yaml
 
 /data/**
 /src/data_produce/rewrite/temp/** 

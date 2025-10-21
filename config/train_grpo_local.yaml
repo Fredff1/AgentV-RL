@@ -1,7 +1,7 @@
 # 顶层配置
 logging:                               # 日志相关配置
   level: "DEBUG"                       # 日志级别：DEBUG/INFO/WARNING/ERROR/CRITICAL（也可用数字 10/20/...）
-  log_to_file: true                    # 是否写入文件
+  log_to_file: false                    # 是否写入文件
   log_file_dir: "/root/workspace/agent-rm/log"  # 日志目录（需可写）
   log_file_name: "default.log"         # 日志文件名
 
