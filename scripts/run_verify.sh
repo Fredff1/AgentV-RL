@@ -1,11 +1,14 @@
-export CUDA_VISIBLE_DEVICES=3,6,7
+export CUDA_VISIBLE_DEVICES=4,5,7
 export TOKENIZERS_PARALLELISM=false
+export RAY_TMPDIR=/root/workspace/agent-rm/ray_working_dir
 
 NUM_WORKERS=3
 
 TASK_NAME=qwen2.5-7b-math-bon128-gaokao-2023-eval
 
-EXP_NAME=qwen2.5-7b-eval-2
+EXP_NAME=qwen2.5-7b-eval-ray-4
+
+ray stop
 
 python /root/workspace/agent-rm/Agent-Verifier/src/run_verify.py \
   --config /root/workspace/agent-rm/Agent-Verifier/config/distrubute_verify.yaml \

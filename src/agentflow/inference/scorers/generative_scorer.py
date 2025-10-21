@@ -58,7 +58,7 @@ Your judgement:
     ) -> List[List[float]]:
         """分批调用 prob_calculator.choice_probs，保持顺序不变。"""
         all_probs: List[List[float]] = []
-        for _, pref_chunk in tqdm(self._chunk(prefixes, self.prob_bs),desc="Calculating probs"):
+        for _, pref_chunk in self._chunk(prefixes, self.prob_bs):
             choices_chunk = [list(labels) for _ in range(len(pref_chunk))]
             try:
                 probs_chunk = self.prob_calculator.choice_probs(pref_chunk, choices_chunk, **kw)

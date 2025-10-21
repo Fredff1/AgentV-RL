@@ -41,7 +41,7 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
     ):
         super().__init__()
         ChatTemplateDefaultsMixin.__init__(self)
-        self.config = config # 占位符，目前没有用到
+        self.config = config 
         if logger:
             self.logger = logger
         else:
@@ -199,9 +199,6 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
                 - The metainfo format: {"raw_output":Dataproto}
         """
         return self._generate(prompts, extra, **kwargs)
-    
-    
-
     
     def generate_sequences(self, prompts: DataProto, **kwargs):
         return self.wg.generate_sequences(prompts, **kwargs)

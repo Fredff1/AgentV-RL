@@ -6,10 +6,9 @@ from typing import Any, Dict, List, Optional
 from dataclasses import asdict
 
 from agentflow.tools.base import BaseTool, ToolCallRequest, ToolCallResult
-from agentflow.tools.code.sandbox.python_executor import PythonExecutor
-from agentflow.tools.code.sandbox.python_executor_no_proc import PythonExecutorNoProc
 from agentflow.tools.code.sandbox.execution_plan import ExecPlan
 from agentflow.tools.code.sandbox.python_sandbox import SandboxConfig
+from agentflow.tools.code.sandbox.python_executor import PythonExecutor
 
 class PythonExecutionTool(BaseTool):
     """Execute Python code in a controlled sandbox with extensible context & helpers."""
@@ -28,7 +27,6 @@ class PythonExecutionTool(BaseTool):
                  context: Optional[Dict[str, Any]] = None,
                  helper_modules: Optional[List[Dict[str, Any]]] = None,
                  helpers: Optional[Dict[str, Any]] = None,
-                 use_proc: bool = False,
                  use_tqdm : bool = False
         ):
         super().__init__(config=config, max_rounds=max_rounds)
@@ -40,11 +38,9 @@ class PythonExecutionTool(BaseTool):
             truncate_len=int(truncate_len),
         )
         self.use_tqdm = use_tqdm
-        self.use_proc = use_proc
-        if use_proc:
-            self.executor = PythonExecutor(config=sconf)
-        else:
-            self.executor = PythonExecutorNoProc(config=sconf)
+
+        self.executor = PythonExecutor(config=sconf)
+        
         if headers: 
             self.executor.set_headers(headers)
         if context: 
