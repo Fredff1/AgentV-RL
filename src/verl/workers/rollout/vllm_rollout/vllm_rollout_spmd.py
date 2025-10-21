@@ -203,6 +203,9 @@ class vLLMRollout(BaseRollout):
         kwargs["n"] = 1  # already repeat in ray_trainer
         print(f"kwargs: {kwargs}")
         self.sampling_params = SamplingParams(**kwargs)
+        
+        self.sampling_params.stop = ["</answer>","</python>"]
+        self.sampling_params.include_stop_str_in_output=True
 
         self.pad_token_id = tokenizer.pad_token_id
 

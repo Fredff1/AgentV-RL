@@ -18,11 +18,11 @@ def _is_sleeping(llm: LLM):
     return llm.llm_engine.is_sleeping()
         
 @contextmanager
-def free_cache(backend, level: int = 1):
+def free_vllm_mem(backend, level: int = 1):
     """Free memory of a vllm-backend for other usage.
 
     Args:
-        backend (UseVllmBackend): Any backend based on vllm.
+        backend (SupportVllm): Any backend based on vllm.
         level (int, optional): The sleep level of vllm engine . Defaults to 1.
     """
     assert isinstance(backend, SupportVllm), "backend must be vllm-based to use free cache engine"

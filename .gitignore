@@ -214,7 +214,7 @@ records/**
 !/config/default.yaml
 !/config/eval.yaml
 !/config/train.yaml
-!/config/train_grpo.yaml
+!/config/train_grpo_local.yaml
 !/config/distrubute_verify.yaml
 
 /data/**

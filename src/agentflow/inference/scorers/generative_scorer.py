@@ -4,7 +4,7 @@ from tqdm import tqdm
 
 from agentflow.core.interfaces import CanGenerate, CanRMScores, CanChoiceProbs, SupportChatTemplate
 from agentflow.utils.tag_util import find_tags
-from agentflow.utils.vllm import SupportVllm, free_cache
+from agentflow.utils.vllm import SupportVllm, free_vllm_mem
 
 
 class SupportLogitsScore(CanGenerate,CanChoiceProbs):
@@ -93,7 +93,7 @@ Your judgement:
                 invalid_idxs.append(idx)
             prefixes.append(prefix_text)
         if isinstance(self.generator, SupportVllm):
-            with free_cache(self.generator, level=1):
+            with free_vllm_mem(self.generator, level=1):
                 probs = self._batched_choice_probs(prefixes,self.choice_labels)
         else:
             probs = self._batched_choice_probs(prefixes,self.choice_labels)
