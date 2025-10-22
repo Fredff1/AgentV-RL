@@ -294,20 +294,21 @@ class vLLMAgentMultiTurnWrapper:
         wg: VerlWg,
         tokenizer: PreTrainedTokenizer,
         agent_config_path: str = None,
+        max_subtasks: int = 8,
         **kwargs
     ): 
         self.config=config
         if agent_config_path:
-            config = load_config(agent_config_path)
+            ag_config = load_config(agent_config_path)
         else:
-            config = None
-        self.logger = get_logger(config, __name__)
+            ag_config = None
+        self.logger = get_logger(ag_config, __name__)
         self.wg = wg
         self.tokenizer = tokenizer
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = self.tokenizer.eos_token_id
         self.backend = VerlWgBackend(
-            config=config,
+            config=ag_config,
             wg=wg,
             tokenizer=tokenizer,
             logger=self.logger,
@@ -319,7 +320,7 @@ class vLLMAgentMultiTurnWrapper:
         self.tool_registry = tool_registry
         self.planner = LLMPlanner(
             self.backend,
-            max_num_subtasks=None,
+            max_num_subtasks=max_subtasks,
         )
         self.executor = VerificationSubtaskExecutor(
             self.backend,

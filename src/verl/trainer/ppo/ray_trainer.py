@@ -397,6 +397,7 @@ class RayPPOTrainer:
                 wg=self.actor_rollout_wg,
                 tokenizer=self.tokenizer,
                 agent_config_path=self.config.actor_rollout_ref.extra.agent_config_path,
+                max_subtasks=self.config.actor_rollout_ref.extra.max_num_subtasks
             )
         else:
             self.wg_wrapper = vLLMAgentWrapper(

@@ -3,7 +3,7 @@ set -x
 export WANDB_MODE=offline
 export WANDB_DIR=/root/workspace/agent-rm/wandb
 
-export CUDA_VISIBLE_DEVICES=5,6
+export CUDA_VISIBLE_DEVICES=2,3
 export RAY_TEMP_DIR=/mnt/data/ray_temp
 export NCCL_TIMEOUT=3600  
 export HYDRA_FULL_ERROR=1
@@ -39,6 +39,8 @@ AGENT_CONFIG_PATH=/root/workspace/agent-rm/Agent-Verifier/config/train_grpo.yaml
 n_gpus_per_node=2
 nnodes=1
 
+MAX_NUM_SUBTASKS=1
+
 
 ray stop
 ray start --head \
@@ -53,7 +55,7 @@ python3 -m verl.trainer.main_ppo --config-path=$CONFIG_DIR --config-name=$CONFIG
     algorithm.adv_estimator=grpo \
     data.train_files="$train_files" \
     data.val_files="$test_files" \
-    data.train_batch_size=12 \
+    data.train_batch_size=4 \
     data.max_prompt_length=2400 \
     data.max_response_length=5600 \
     data.filter_overlong_prompts=True \
@@ -72,6 +74,7 @@ python3 -m verl.trainer.main_ppo --config-path=$CONFIG_DIR --config-name=$CONFIG
     actor_rollout_ref.rollout.max_model_len=12800 \
     actor_rollout_ref.actor.checkpoint.save_contents='["hf_model"]' \
     actor_rollout_ref.extra.agent_config_path=$AGENT_CONFIG_PATH\
+    actor_rollout_ref.extra.max_num_subtasks=$MAX_NUM_SUBTASKS\
     custom_reward_function.path=$REWAED_FN_PATH \
     custom_reward_function.name=compute_agentic_reward \
     algorithm.use_kl_in_reward=False \
