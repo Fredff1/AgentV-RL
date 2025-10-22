@@ -24,6 +24,10 @@ backend:                                # 推理后端与采样参数
       - "</plan>"
     use_tqdm: false
     enable_sleep_mode: true
+    max_model_len: 12800
+    max_num_batched_tokens: 21000
+    max_num_seqs: 512
+    enable_prefix_caching: true
   openai:                               # OpenAI/兼容接口配置（仅在使用 OpenAI 风格后端时生效）
     api_key: "sk-xxx"                   # API Key（务必用环境变量或密钥管理）
     url: ""                             # 自定义 Base URL（如走兼容网关时设置；官方可留空）

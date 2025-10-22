@@ -290,7 +290,7 @@ def main():
             logger.info(f"Submitted batch to worker#{wid}, size={len(payload)}")
 
         while inflight:
-            ready, rest = ray.wait([obj for (_, obj, _) in inflight], num_returns=1, timeout=8)
+            ready, rest = ray.wait([obj for (curr_wid, obj, _) in inflight], num_returns=1, timeout=8)
             if not ready:
                 while len(inflight) < window and submit_one():
                     pass
@@ -298,7 +298,6 @@ def main():
             obj_done = ready[0]
             i = next(k for k, (_, o, _) in enumerate(inflight) if o == obj_done)
             wid, _, blocks = inflight.pop(i)
-
             items = ray.get(obj_done)  # List[{"scores":..., "metas":..., "count":...}]
             for blk, item in zip(blocks, items):
                 L = int(item["count"])
@@ -307,7 +306,8 @@ def main():
                 blk_out = dict(blk)
                 if "idx" not in blk_out.keys():
                     blk_out["idx"]=10000
-
+                idx = blk_out.get("idx",10000)
+                logger.info(f"Worker#{wid} finished task with idx {idx}")
                 evaluations: List[Dict[str, Any]] = blk_out.get("evaluations") or [dict() for _ in range(L)]
                 for eva, meta, score in zip(evaluations, metas, scores):
                     eva["judge"] = meta.get("judge")

@@ -27,6 +27,10 @@ vllm_config={
     "stop_tokens":[],
     "use_tqdm":True,
     "enable_sleep_mode":True,
+    "max_model_len":12800,
+    "max_num_batched_tokens":12800,
+    "max_num_seqs": 128,
+    "enable_prefix_caching":True,
 }
 
 openai_config={

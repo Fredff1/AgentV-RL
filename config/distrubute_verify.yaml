@@ -15,7 +15,7 @@ backend:                                # 推理后端与采样参数
     top_k: 20                           # 只在前 K 个候选中采样（<=0 表示不启用）
     repetition_penalty: 1.0
   vllm:                                 # vLLM 专属配置（仅在使用 vLLM 时生效）
-    gpu_memory_utilization: 0.65         # 单卡显存利用率上限（0~1 之间）
+    gpu_memory_utilization: 0.6         # 单卡显存利用率上限（0~1 之间）
     tensor_parallel_size: 1             # 张量并行大小（=GPU 数或其因数）
     stop_tokens:
       - "</answer>"
@@ -23,6 +23,10 @@ backend:                                # 推理后端与采样参数
       - "</next>"
     use_tqdm: false
     enable_sleep_mode: true
+    max_model_len: 14500
+    max_num_batched_tokens: 21000
+    max_num_seqs: 512
+    enable_prefix_caching: true
   openai:                               # OpenAI/兼容接口配置（仅在使用 OpenAI 风格后端时生效）
     api_key: "sk-xxx"                   # API Key（务必用环境变量或密钥管理）
     url: ""                             # 自定义 Base URL（如走兼容网关时设置；官方可留空）

@@ -36,6 +36,10 @@ class VllmBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate):
             tensor_parallel_size=self.vllm_config["tensor_parallel_size"],
             trust_remote_code=True,
             enable_sleep_mode=self.vllm_config.get("enable_sleep_mode",False),
+            max_model_len=self.vllm_config.get("max_model_len",12800),
+            max_num_batched_tokens=self.vllm_config.get("max_num_batched_tokens",12800),
+            max_num_seqs=self.vllm_config.get("max_num_seqs",256),
+            enable_prefix_caching=self.vllm_config.get("enable_prefix_caching",True),
         )
         
         self.tokenizer = self.vllm.get_tokenizer()
