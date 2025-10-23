@@ -178,6 +178,8 @@ class PlanSubtaskSingleAgent(CanRMScores):
             prob_calculator=prob_calculator,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            chat_template_backend=backend,
+            base_backend=backend,
         )
 
     

@@ -27,13 +27,14 @@ def free_vllm_mem(backend, level: int = 1):
     """
     assert isinstance(backend, SupportVllm), "backend must be vllm-based to use free cache engine"
     llm = backend.get_vllm_instance()
-    if not _is_sleeping(llm):
+    if llm and not _is_sleeping(llm):
         llm.sleep(level)
         torch.cuda.empty_cache()
     try:
         yield
     finally:
-        llm.wake_up(tags = ["weights","kv_cache"])
+        if llm:
+            llm.wake_up(tags = ["weights","kv_cache"])
     
         
     

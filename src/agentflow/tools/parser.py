@@ -8,7 +8,7 @@ class TagToolParser(ToolParser):
     \<tool_name>content\</tool_name>
 
     """
-    def __init__(self, tool_tags: List[str] = ["search","python"]):
+    def __init__(self, tool_tags: List[str] = ["python"]):
         super().__init__()
         self.tool_tags = tool_tags
         

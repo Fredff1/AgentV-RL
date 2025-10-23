@@ -36,6 +36,7 @@ Your judgement:
         choice_labels: Sequence[str] = ("true", "false"), 
         eps: float = 1e-15,   
         chat_template_backend: Optional[SupportChatTemplate] = None,
+        base_backend: Optional[CanGenerate] = None,
     ):
         super().__init__()
         self.generator = generator
@@ -49,6 +50,10 @@ Your judgement:
             self.chat_template_backend = chat_template_backend
         else:
             self.chat_template_backend = generator
+        if base_backend:
+            self.base_backend = base_backend
+        else:
+            self.base_backend = generator
         
         
     def _chunk(self, xs: Sequence[Any], n: int):
@@ -99,8 +104,9 @@ Your judgement:
                 prefix_text = "Mock"
                 invalid_idxs.append(idx)
             prefixes.append(prefix_text)
-        if isinstance(self.generator, SupportVllm):
-            with free_vllm_mem(self.generator, level=1):
+        
+        if isinstance(self.base_backend, SupportVllm):
+            with free_vllm_mem(self.base_backend, level=1):
                 probs = self._batched_choice_probs(prefixes,self.choice_labels)
         else:
             probs = self._batched_choice_probs(prefixes,self.choice_labels)
