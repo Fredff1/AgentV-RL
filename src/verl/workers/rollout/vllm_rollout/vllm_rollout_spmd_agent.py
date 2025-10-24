@@ -24,7 +24,7 @@ import time
 from contextlib import contextmanager
 from copy import deepcopy
 from types import MethodType
-from typing import Any, List, Union, Dict
+from typing import Any, List, Union, Dict, Optional
 
 import numpy as np
 import ray
@@ -50,7 +50,7 @@ from verl.workers.rollout.base import BaseRollout
 from agentflow.backend.vllm import VllmInjectionBackend
 from agentflow.backend.verl import VerlWgBackend, VerlWg
 from agentflow.agent.basic import ToolDrivenAgent
-from agentflow.agent.planner.llm_planner import LLMPlanner
+from agentflow.agent.planner.llm_planner import LLMPlanner, MINIMAL_FALLBACK_OBJ, Plan, Subtask
 from agentflow.agent.executor.executor import VerificationSubtaskExecutor
 from agentflow.agent.executor.integrator import build_rollout_for_model
 from agentflow.tools.registry import ToolRegistry
@@ -286,7 +286,7 @@ class vLLMAgentWrapper:
 
 
 
-class vLLMAgentMultiTurnWrapper:
+class vLLMAgentMultiStageWrapper:
     
     def __init__(
         self,
@@ -348,6 +348,257 @@ class vLLMAgentMultiTurnWrapper:
             responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
         """
+        
+        meta_info = prompts.meta_info
+        stage = meta_info.get("stage","no_stage")
+        output: DataProto = None
+        
+        timing_generate = {}
+        with simple_timer("agent generation", timing_generate):
+        
+            if stage == "plan":
+                output = self._generate_stage_plan(prompts, **kwargs)
+            elif stage == "subtask":
+                output = self._generate_stage_subtask(prompts, **kwargs)
+            elif stage == "review":
+                output = self._generate_stage_review(prompts, **kwargs)
+            else:
+                output = self._generate_no_stage(prompts, **kwargs)
+                
+        output.meta_info["timing"] = timing_generate
+        output = output.to("cpu")
+        
+        return output
+    
+    def _prepare_result_proto(self, original_proto: DataProto, gen_results: List[str] | List[List[int]], response_mask: Optional[List[List[int]]] = None,**kwargs) -> DataProto:
+        meta_info = original_proto.meta_info
+        idx: torch.Tensor = original_proto.batch["input_ids"]  # (bs, prompt_length)
+        # left-padded attention_mask
+        attention_mask: torch.Tensor = original_proto.batch["attention_mask"]
+        position_ids: torch.Tensor = original_proto.batch["position_ids"]
+
+        # used to construct attention_mask
+        eos_token_id = self.tokenizer.eos_token_id
+        
+        non_tensor_batch = original_proto.non_tensor_batch
+
+        batch_size = idx.size(0)
+        
+        response_ids_list = []
+        
+        for cont in gen_results:
+            if isinstance(cont, str):
+                ids = self.tokenizer(cont, add_special_tokens=False).input_ids
+                response_ids_list.append(ids)
+            else:
+                response_ids_list.append(cont)
+
+        response = pad_2d_list_to_length(
+            response_ids_list,
+            self.pad_token_id,
+            max_length=self.config.response_length
+        ).to(idx.device)
+
+        seq = torch.cat([idx, response], dim=-1)
+
+        if self.config.calculate_log_probs: 
+            raise ValueError("Log probs not supported")
+
+        response_length = response.size(1)
+        delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
+        delta_position_id = delta_position_id.unsqueeze(0).expand(batch_size, -1)
+        if position_ids.dim() == 3:  # qwen2vl mrope
+            delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
+
+        response_position_ids = position_ids[..., -1:] + delta_position_id
+        position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
+
+        response_attention_mask = get_response_mask(
+            response_id=response,
+            eos_token=eos_token_id,
+            dtype=attention_mask.dtype
+        )
+        attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
+        
+        has_resp_mask = False
+        if response_mask is not None:
+            resp_mask_tensor = pad_2d_list_to_length(
+                response_mask,
+                self.pad_token_id,
+                max_length=self.config.response_length
+            ).to(idx.device)
+            has_resp_mask = True
+        
+        if has_resp_mask:
+            batch = TensorDict(
+                {
+                    "prompts": idx,
+                    "responses": response,
+                    "input_ids": seq,
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                    "response_mask": resp_mask_tensor,
+                },
+                batch_size=batch_size,
+            )
+        else:
+            batch = TensorDict(
+                {
+                    "prompts": idx,
+                    "responses": response,
+                    "input_ids": seq,
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                },
+                batch_size=batch_size,
+            )
+
+        for key, value in non_tensor_batch.items():
+            if not isinstance(value, np.ndarray):
+                try:
+                    non_tensor_batch[key] = np.array(value, dtype=object)
+                except Exception as e:
+                    print(f"Could not convert non_tensor_batch['{key}'] to numpy array. Error: {e}")
+        
+        gather_output = DataProto(batch=batch, non_tensor_batch=non_tensor_batch, meta_info=original_proto.meta_info)
+        return gather_output
+        
+    def _generate_stage_plan(self, prompts: DataProto, **kwargs):
+        
+        meta_info = prompts.meta_info
+        idx: torch.Tensor = prompts.batch["input_ids"]  # (bs, prompt_length)
+
+        batch_size = idx.size(0)
+
+        non_tensor_batch = prompts.non_tensor_batch
+        
+        extra_info: np.ndarray = non_tensor_batch.get("extra_info")
+        if extra_info is None:
+            raise ValueError("Extra info must be provided for qa info")
+            extra_info=[{} for _ in range(batch_size)]
+            self.logger.warning("Extra info of current batch is missing, which may cause unexpected results")
+        
+        problems: List[str] = [extra_info[i].get("problem","") for i in range(batch_size)]
+        solutions: List[str] = [extra_info[i].get("solution","") for i in range(batch_size)]
+        
+        qa_sequences = [
+            DEFAULT_SEQ_TEMPLATE.format(problem=prob, solution=solu)
+            for prob, solu in zip(problems, solutions)
+        ]
+        
+        input_msgs = self.planner._build_prompt(sequence=qa_sequences)
+        
+        processed_input = self.backend.apply_chat_template(input_msgs)
+        process_proto = self.backend.prepare_dataproto(processed_input)
+        process_proto.meta_info.update(meta_info)
+        
+        texts, gen_metas = self.backend.generate(input_msgs)
+        
+        plans = []
+
+        for i, raw in enumerate(texts):
+            try:
+                obj = self.planner._parse_plan_obj(raw)
+                plans.append(self.planner._coerce_to_plan(obj))
+            except Exception:
+                plans.append(self.planner._coerce_to_plan(MINIMAL_FALLBACK_OBJ))
+        
+        process_proto.non_tensor_batch["plan"] = [p for p in plans]
+        
+        final_proto = self._prepare_result_proto(process_proto, texts)
+        return final_proto
+        
+    
+    def _generate_stage_subtask(self, prompts: DataProto, **kwargs):
+        meta_info = prompts.meta_info
+        subtask_slot = meta_info["subtask_slot"]
+        assert subtask_slot > 0
+        
+        idx: torch.Tensor = prompts.batch["input_ids"]  # (bs, prompt_length)
+
+        batch_size = idx.size(0)
+        
+        non_tensor_batch = prompts.non_tensor_batch
+
+        plans: np.ndarray[Plan] = non_tensor_batch["plans"]
+        subtasks: np.ndarray[Subtask] = non_tensor_batch["subtasks"]
+        
+        # TODO Check subtask is ok
+        
+        extra_info: np.ndarray = non_tensor_batch.get("extra_info")
+        if extra_info is None:
+            raise ValueError("Extra info must be provided for qa info")
+            extra_info=[{} for _ in range(batch_size)]
+            self.logger.warning("Extra info of current batch is missing, which may cause unexpected results")
+        
+        problems: List[str] = [extra_info[i].get("problem","") for i in range(batch_size)]
+        solutions: List[str] = [extra_info[i].get("solution","") for i in range(batch_size)]
+        
+        qa_sequences = [
+            DEFAULT_SEQ_TEMPLATE.format(problem=prob, solution=solu)
+            for prob, solu in zip(problems, solutions)
+        ]
+        
+        input_msgs = [self.executor._format_subtask_prompt(seq, p, s) for seq, p, s in zip(qa_sequences, plans, subtasks)]
+        
+        processed_input = self.backend.apply_chat_template(input_msgs)
+        process_proto = self.backend.prepare_dataproto(processed_input)
+        process_proto.meta_info.update(meta_info)
+        
+        reports = self.executor.execute_one(qa_sequences, plans, subtasks)
+        
+        resp_mask_ids = [[] for _ in range(len(reports))]
+        resp_ids = [[] for _ in range(len(reports))]
+        for idx, rep in enumerate(reports):
+            msgs = rep.round_messages
+
+            for msg in msgs:
+                if msg.role == "system" or msg.role == "user":
+                    continue
+                elif msg.role == "assistant":
+                    txt_ids = self.tokenizer(msg.content, add_special_tokens=False).input_ids
+                    mask_ids = [1 for _ in range(len(txt_ids))]
+                elif msg.role == "tool":
+                    txt_ids = self.tokenizer(msg.content, add_special_tokens=False).input_ids
+                    mask_ids = [0 for _ in range(len(txt_ids))]
+            resp_ids[idx].append(txt_ids)
+            resp_mask_ids[idx].append(mask_ids)
+                
+        
+        process_proto.non_tensor_batch["reports"] = reports
+        
+        final_proto = self._prepare_result_proto(process_proto, resp_ids, resp_mask_ids)
+        return final_proto
+    
+    def _generate_stage_review(self, prompts: DataProto, **kwargs):
+        meta_info = prompts.meta_info
+        idx: torch.Tensor = prompts.batch["input_ids"]  # (bs, prompt_length)
+        # left-padded attention_mask
+        attention_mask: torch.Tensor = prompts.batch["attention_mask"]
+        position_ids: torch.Tensor = prompts.batch["position_ids"]
+
+        # used to construct attention_mask
+        eos_token_id = self.tokenizer.eos_token_id
+
+        batch_size = idx.size(0)
+
+        non_tensor_batch = prompts.non_tensor_batch
+        
+        extra_info: np.ndarray = non_tensor_batch.get("extra_info")
+        if extra_info is None:
+            raise ValueError("Extra info must be provided for qa info")
+            extra_info=[{} for _ in range(batch_size)]
+            self.logger.warning("Extra info of current batch is missing, which may cause unexpected results")
+        
+        problems: List[str] = [extra_info[i].get("problem","") for i in range(batch_size)]
+        solutions: List[str] = [extra_info[i].get("solution","") for i in range(batch_size)]
+        
+        qa_sequences = [
+            DEFAULT_SEQ_TEMPLATE.format(problem=prob, solution=solu)
+            for prob, solu in zip(problems, solutions)
+        ]
+    
+    def _generate_no_stage(self, prompts: DataProto, **kwargs):
         idx: torch.Tensor = prompts.batch["input_ids"]  # (bs, prompt_length)
         # left-padded attention_mask
         attention_mask: torch.Tensor = prompts.batch["attention_mask"]
@@ -381,90 +632,88 @@ class vLLMAgentMultiTurnWrapper:
             "sleep_after_inference":True,
         }
         
-        timing_generate = {}
-        with simple_timer("agent generation", timing_generate):
+
         
-            plans = self.planner.plan(qa_sequences, None, **kwargs_middle)
-            self.logger.info("Start Planning")
-            self.logger.info("Planning finished, executing subtasks.")
+        plans = self.planner.plan(qa_sequences, None, **kwargs_middle)
+        self.logger.info("Start Planning")
+        self.logger.info("Planning finished, executing subtasks.")
 
-            self.logger.info("Start Resports.")
-            reports = self.executor.execute(sequences=qa_sequences, plans=plans, **kwargs_middle)
+        self.logger.info("Start Resports.")
+        reports = self.executor.execute(sequences=qa_sequences, plans=plans, **kwargs_middle)
 
-            self.logger.info("Subtasks ready, preforming final judge.")
-
-
-            rollouts = [build_rollout_for_model(sequence=seq, plan=plan, report=report, max_chars_per_subtask=2800) for seq, plan, report in zip(qa_sequences,plans,reports)]
-
-            final_inputs = [[
-                {"role":"system","content":FINAL_SYSTEM_PROMPT},
-                {"role":"user", "content":FINAL_USER_PROMPT.format(
-                    sequence = rollout,  
-                )}
-            ] for rollout in rollouts]
-            
-            final_outputs, _ = self.backend.generate(final_inputs, None, **kwargs_after)
-
-            
-            final_rollouts = [f"{rollout}\n{output}" for rollout, output in zip(rollouts, final_outputs)]
-
-            response_ids_list = []
-            for txt in final_rollouts:
-                ids = self.tokenizer(txt, add_special_tokens=False).input_ids
-                response_ids_list.append(ids)
-            self.logger.info("Final judge ready, preparing data proto")
-            response = pad_2d_list_to_length(
-                response_ids_list,
-                self.pad_token_id,
-                max_length=self.config.response_length
-            ).to(idx.device)
-
-            seq = torch.cat([idx, response], dim=-1)
-
-            if self.config.calculate_log_probs: 
-                raise ValueError("Log probs not supported")
-
-            response_length = response.size(1)
-            delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
-            delta_position_id = delta_position_id.unsqueeze(0).expand(batch_size, -1)
-            if position_ids.dim() == 3:  # qwen2vl mrope
-                delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
-
-            response_position_ids = position_ids[..., -1:] + delta_position_id
-            position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
-
-            response_attention_mask = get_response_mask(
-                response_id=response,
-                eos_token=eos_token_id,
-                dtype=attention_mask.dtype
-            )
-            attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
-
-            batch = TensorDict(
-                {
-                    "prompts": idx,
-                    "responses": response,
-                    "input_ids": seq,
-                    "attention_mask": attention_mask,
-                    "position_ids": position_ids,
-                },
-                batch_size=batch_size,
-            )
+        self.logger.info("Subtasks ready, preforming final judge.")
 
 
-            non_tensor_batch["plans"] = [plan.to_dict() for plan in plans]
-            non_tensor_batch["subtask_executions"] = [report.to_dict() for report in reports]
+        rollouts = [build_rollout_for_model(sequence=seq, plan=plan, report=report, max_chars_per_subtask=2800) for seq, plan, report in zip(qa_sequences,plans,reports)]
 
-            for key, value in non_tensor_batch.items():
-                if not isinstance(value, np.ndarray):
-                    try:
-                        non_tensor_batch[key] = np.array(value)
-                    except Exception as e:
-                        print(f"Could not convert non_tensor_batch['{key}'] to numpy array. Error: {e}")
+        final_inputs = [[
+            {"role":"system","content":FINAL_SYSTEM_PROMPT},
+            {"role":"user", "content":FINAL_USER_PROMPT.format(
+                sequence = rollout,  
+            )}
+        ] for rollout in rollouts]
+        
+        final_outputs, _ = self.backend.generate(final_inputs, None, **kwargs_after)
 
-            gather_output = DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
-        gather_output.meta_info["timing"] = timing_generate
-        gather_output = gather_output.to("cpu")
+        
+        final_rollouts = [f"{rollout}\n{output}" for rollout, output in zip(rollouts, final_outputs)]
+
+        response_ids_list = []
+        for txt in final_rollouts:
+            ids = self.tokenizer(txt, add_special_tokens=False).input_ids
+            response_ids_list.append(ids)
+        self.logger.info("Final judge ready, preparing data proto")
+        response = pad_2d_list_to_length(
+            response_ids_list,
+            self.pad_token_id,
+            max_length=self.config.response_length
+        ).to(idx.device)
+
+        seq = torch.cat([idx, response], dim=-1)
+
+        if self.config.calculate_log_probs: 
+            raise ValueError("Log probs not supported")
+
+        response_length = response.size(1)
+        delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
+        delta_position_id = delta_position_id.unsqueeze(0).expand(batch_size, -1)
+        if position_ids.dim() == 3:  # qwen2vl mrope
+            delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
+
+        response_position_ids = position_ids[..., -1:] + delta_position_id
+        position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
+
+        response_attention_mask = get_response_mask(
+            response_id=response,
+            eos_token=eos_token_id,
+            dtype=attention_mask.dtype
+        )
+        attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
+
+        batch = TensorDict(
+            {
+                "prompts": idx,
+                "responses": response,
+                "input_ids": seq,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+            },
+            batch_size=batch_size,
+        )
+
+
+        non_tensor_batch["plans"] = [plan.to_dict() for plan in plans]
+        non_tensor_batch["subtask_executions"] = [report.to_dict() for report in reports]
+
+        for key, value in non_tensor_batch.items():
+            if not isinstance(value, np.ndarray):
+                try:
+                    non_tensor_batch[key] = np.array(value)
+                except Exception as e:
+                    print(f"Could not convert non_tensor_batch['{key}'] to numpy array. Error: {e}")
+
+        gather_output = DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+
         return gather_output
         
 

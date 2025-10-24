@@ -580,34 +580,59 @@ class RayPPOTrainer:
         Creates the train and validation dataloaders.
         """
         # TODO: we have to make sure the batch size is divisible by the dp size
-        from verl.trainer.main_ppo import create_rl_dataset, create_rl_sampler
+        from verl.trainer.main_ppo_agentic import create_rl_dataset, create_rl_sampler
+        from verl.utils.dataset.agent_rl_dataset import StageExpandedRLHFDataset, multistage_collate_fn
+        from verl.utils.common.agent_rl_utils import MultiStagePlan
+        from verl.utils.sampler.agent_rl_sampler import FlatBatchSampler
 
         if train_dataset is None:
             train_dataset = create_rl_dataset(
                 self.config.data.train_files, self.config.data, self.tokenizer, self.processor
             )
+        raw_train_set = train_dataset
         if val_dataset is None:
             val_dataset = create_rl_dataset(
                 self.config.data.val_files, self.config.data, self.tokenizer, self.processor
             )
+        
+        
+        schedule = [("plan", 2), ("subtask", 6), ("review", 1)]
+        train_batch_size = self.config.data.train_batch_size
+        
+        g = torch.Generator()
+        perm = torch.randperm(len(raw_train_set), generator=g).tolist()
+        stage_plan = MultiStagePlan(
+            base_len=len(raw_train_set),
+            base_batch_size=train_batch_size,
+            schedule=schedule,
+            permuted_base_indices=perm,
+        )
+        
+        virtual_dataset = StageExpandedRLHFDataset(base=train_batch_size, plan=stage_plan)
+        train_dataset = virtual_dataset
+        
         self.train_dataset, self.val_dataset = train_dataset, val_dataset
+        # TODO Schedule from config rather than hard-coded
 
         if train_sampler is None:
             train_sampler = create_rl_sampler(self.config.data, self.train_dataset)
+        train_sampler = FlatBatchSampler(stage_plan)
+        
         if collate_fn is None:
             from verl.utils.dataset.rl_dataset import collate_fn as default_collate_fn
 
             collate_fn = default_collate_fn
+        train_collate_fn = multistage_collate_fn
 
         num_workers = self.config.data["dataloader_num_workers"]
 
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,
-            batch_size=self.config.data.get("gen_batch_size", self.config.data.train_batch_size),
+            batch_size=train_batch_size,
             num_workers=num_workers,
             drop_last=True,
-            collate_fn=collate_fn,
-            sampler=train_sampler,
+            collate_fn=train_collate_fn,
+            batch_sampler=train_sampler
         )
 
         val_batch_size = self.config.data.val_batch_size  # Prefer config value if set
@@ -773,7 +798,7 @@ class RayPPOTrainer:
                 else:
                     test_output_gen_batch_padded = self.async_rollout_manager.generate_sequences(test_gen_batch_padded)
             else:
-                test_output_gen_batch_padded = self.wg_wrapper.generate_sequences(test_gen_batch_padded)
+                test_output_gen_batch_padded = self.wg_wrapper.generate_sequences(test_gen_batch_padded, is_validate = True)
 
             # unpad
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
@@ -1191,8 +1216,12 @@ class RayPPOTrainer:
                 )
                 with marked_timer("start_profile", timing_raw):
                     self._start_profiling(do_profile)
+                    
+                data = batch_dict["data"]      
+                meta_info = batch_dict["meta_info"]  
+                stage = meta_info["stage"]
 
-                batch: DataProto = DataProto.from_single_dict(batch_dict)
+                batch: DataProto = DataProto.from_single_dict(data, meta_info = meta_info)
 
                 # pop those keys for generation
                 batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
@@ -1218,6 +1247,8 @@ class RayPPOTrainer:
                     batch_keys=batch_keys_to_pop,
                     non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
                 )
+                
+                gen_batch.meta_info.update(meta_info)
 
                 # pass global_steps to trace
                 gen_batch.meta_info["global_steps"] = self.global_steps

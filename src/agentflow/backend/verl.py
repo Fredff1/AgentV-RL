@@ -146,6 +146,11 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
             meta_info=input_proto_meta,
         )
         return proto
+    
+    def resolve_dataproto(self, proto: DataProto) -> List[str]:
+        responses_ids = proto.batch["responses"]
+        response_texts = self.tokenizer.batch_decode(responses_ids, skip_special_tokens=True)
+        return response_texts
         
 
     def _generate(self, prompts: List, extra: List[Dict] = None, **kwargs) -> Tuple[List[str],List[Dict]]:
