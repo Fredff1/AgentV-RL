@@ -30,8 +30,17 @@ def _parse_correctness_reward(text: str, ground_truth: str):
             reward = 0
         elif choice == parsed_ground_truth:
             reward = 1
+            # if parsed_ground_truth == "1":
+            #     reward = 1
+            # else:
+            #     reward = 1.5
+            
         else:
             reward = -1
+            # if parsed_ground_truth == "1":
+            #     reward = -1
+            # else:
+            #     reward = -1.5
     return reward
 
 def compute_agentic_reward(
@@ -60,7 +69,7 @@ def compute_agentic_reward(
         raise NotImplementedError(f"Reward fordatasource of {data_source} is not defined")
     
     assert ground_truth is not None, "GT cannot be None"
-    
+    extra_info = extra_info or {}
     stage = extra_info.get("stage",None)
     if not stage:
         score = compute_bool_reward(
@@ -81,6 +90,9 @@ def compute_agentic_reward(
     elif stage == "subtask":
         subtask_gt = extra_info.get("subtask_gt","None")
         score = _parse_correctness_reward(solution_str, subtask_gt)
+        global_score = _parse_correctness_reward(solution_str, ground_truth)
+        if global_score > 0:
+            score = score + 0.5 * global_score
     elif stage == "review":
         score = _parse_correctness_reward(solution_str, ground_truth)
     else:

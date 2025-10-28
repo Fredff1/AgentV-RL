@@ -178,7 +178,9 @@ INTERPRETATION RULES:
 - Do not invent new subtask IDs; output booleans for exactly the provided IDs.
 - Be consistent: the overall score should reflect the same standards used to judge subtasks.
 
-OUTPUT FORMAT (MUST be valid JSON):
+OUTPUT FORMAT:
+<your reasoning trace>
+```json
 {
   "plan_score": <float 0..10>,
   "subtask_gt": {
@@ -187,6 +189,7 @@ OUTPUT FORMAT (MUST be valid JSON):
     ...
   }
 }
+```
 """
     
     plan_info = f"problem_restatement: {plan.problem_brief}\n Assumptions: {plan.assumptions_required}\n target_quantity: {plan.asked_quantity}\nSubtasks:\n"
