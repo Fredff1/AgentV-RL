@@ -123,7 +123,7 @@ def build_rollout_for_model(
     out_lines.append(_json_compact(plan_dict))
     out_lines.append("</plan>")
 
-    id2report: Dict = {}
+    id2report: Dict[str,VerificationSubtaskReport] = {}
     for r in report.subtask_reports or []:
         sid = r.subtask_id
         if sid:
@@ -186,9 +186,13 @@ def build_rollout_for_model(
         raw_trace = getattr(rep, "raw_trace", "") if rep is not None else ""
         clipped = _smart_tail_with_priority(raw_trace, max_chars_per_subtask)
         clipped = _indent_block(clipped)
+        verdict = str(rep.verdict) if rep else "None"
+        verification = str(rep.verify_text) if rep else "No verification"
 
-        out_lines.append(f'  <subtask id="{_esc_attr(sid)}" title="{_esc_attr(title)}" rational="{_esc_attr(rat)}">')
-        out_lines.append(clipped)
+        out_lines.append(f'  <subtask id="{_esc_attr(sid)}" title="{_esc_attr(title)}" rational="{_esc_attr(rat)}" verdict="{verdict}" >')
+        out_lines.append(f'verification: {verification}')
+        out_lines.append(f'final verdict: {verdict}')
+        # out_lines.append(clipped)
         out_lines.append("  </subtask>")
     out_lines.append("</subtasks>")
 

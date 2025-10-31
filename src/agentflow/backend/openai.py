@@ -28,7 +28,7 @@ class OpenaiBackend(CanGenerate):
             api_key=self.openai_config["api_key"],
             base_url=self.openai_config["url"],
         )
-        self.max_concurrency = self.openai_config.get("max_concurrency",4)
+        self.max_concurrency = self.openai_config.get("max_concurrency", 4)
         
     def _generate(self, prompts: List, extra: List[Dict] = None, **kwargs) -> Tuple[List[str],List[Dict]]:
         """Generate sequences with gievn prompt list

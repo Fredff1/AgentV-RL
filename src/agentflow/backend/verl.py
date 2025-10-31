@@ -112,6 +112,7 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
         raw_input_ids = []
         raw_atten_masks = []
         raw_position_ids = []
+        raw_prompt_ids_list = []
         for prompt in prompts:
             model_inputs = self.tokenizer(
                 prompt,
@@ -133,18 +134,24 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
             )
             position_ids = compute_position_id_with_mask(attention_mask)
             
+            raw_prompt_id = self.tokenizer.encode(prompt, add_special_tokens=False)
+            
             raw_input_ids.append(input_ids[0])
             raw_atten_masks.append(attention_mask[0])
             raw_position_ids.append(position_ids[0])
+            raw_prompt_ids_list.append(raw_prompt_id)
         
         input_ids = torch.stack(raw_input_ids, dim=0)
         attention_mask = torch.stack(raw_atten_masks, dim=0)
         position_ids = torch.stack(raw_position_ids, dim=0)
+        raw_prompt_ids = np.array(raw_prompt_ids_list,dtype=object)
+        
 
         tensor_dict = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "position_ids": position_ids,
+            "raw_prompt_ids": raw_prompt_ids,
         }
         
         input_proto_meta = {
@@ -192,8 +199,10 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
         input_proto = self.prepare_dataproto(padded_prompts)
+        
+        input_proto.meta_info.update({"sleep_after_inference":sleep_after_inference})
 
-        output_proto = self.wg.generate_sequences(input_proto, **kwargs)
+        output_proto = self.wg.generate_sequences(input_proto)
 
 
         responses_ids = output_proto.batch["responses"]

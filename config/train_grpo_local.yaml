@@ -26,6 +26,7 @@ backend:                                # 推理后端与采样参数
     api_key: "sk-bafbshbgvwptczgoaodrjrrggwkyxluxhmjqtphyobripjaw"                   # API Key（务必用环境变量或密钥管理）
     url: "https://api.siliconflow.cn/v1"                             # 自定义 Base URL（如走兼容网关时设置；官方可留空）
     max_retries: 3                     # 最大重试次数（留空则用SDK默认；可填整数如 3）
+    max_concurrency: 3
   rm:
     device: "cuda"
     padding_side: "right"

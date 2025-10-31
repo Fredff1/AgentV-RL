@@ -36,7 +36,8 @@ vllm_config={
 openai_config={
     "api_key":"sk-xxx",
     "url":"",
-    "max_retries":"",
+    "max_retries": 3,
+    "max_concurrency": 4,
 }
 
 rm_config={
