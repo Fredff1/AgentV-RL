@@ -12,11 +12,16 @@ class Message:
     content: str
     name: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    dict_data: Optional[Dict[str, str]] = None
     
     def to_dict(self):
         """Convert to format like {"role":"user","content":"..."}
         """
-        return {"role":self.role,"content":self.content}
+        if self.dict_data:
+            return self.dict_data
+        else:
+            self.dict_data = {"role":self.role,"content":self.content}
+        return self.dict_data
     
     @classmethod
     def from_dicts(cls, messages: List[Dict[str,str]]) ->List[Message]:
@@ -32,7 +37,8 @@ class Message:
         for msg in messages:
             msgs.append(Message(
                 role=msg["role"],
-                content=msg["content"]
+                content=msg["content"],
+                dict_data=msg,
             ))
         return msgs
     

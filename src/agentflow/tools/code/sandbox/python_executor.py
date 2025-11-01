@@ -21,7 +21,7 @@ class PythonExecutor:
                  config: Optional[SandboxConfig] = None,
                  max_workers: Optional[int] = None):
         self.config = config or SandboxConfig()
-        self.max_workers = max_workers or 2
+        self.max_workers = max_workers or 1
         self._headers: List[str] = []
         self._context: Dict[str, Any] = {}
         self._helpers: Dict[str, Any] = {}
@@ -75,7 +75,7 @@ class PythonExecutor:
             return []
         outs: List[ExecutionResult] = [None] * len(plans)
         ctx = get_context("spawn")
-        with ProcessPool(max_workers=min(self.max_workers, len(plans)), context=ctx) as pool:
+        with ProcessPool(max_workers=min(self.max_workers, len(plans)), context=ctx, max_tasks=2) as pool:
             fn_base = partial(_run_in_sandbox,
                          config=self.config,
                          headers=self._headers+self._helper_code,

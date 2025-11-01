@@ -170,7 +170,7 @@ def _run_in_sandbox(code: str,
                     headers: List[str],
                     context: Dict[str, Any],
                     helpers: Dict[str, Any],
-                    limit_resource: bool = False
+                    limit_resource: bool = True
                     ) -> ExecutionResult:
     start = time.time()
     try:

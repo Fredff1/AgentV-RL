@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Any, Optional, Callable
+from contextlib import contextmanager
 
 from .context import AgentContext
 from agentflow.core.interfaces import CanGenerate
@@ -41,6 +42,26 @@ class ToolDrivenAgent(CanGenerate):
         self.finish_fn = finish_fn
         self.error_fn = error_fn
         self.logger = get_logger()
+    
+    @contextmanager
+    def using_func(
+        self,
+        finish_fn: Callable[[AgentContext],bool] = None,
+        error_fn: Optional[Callable[[AgentContext],bool]] = None,
+    ):
+        prev_finish = self.finish_fn
+        prev_error = self.error_fn
+        if finish_fn:
+            self.finish_fn = finish_fn
+        if error_fn:
+            self.error_fn = error_fn
+        try:
+            yield
+        finally:
+            self.finish_fn = prev_finish
+            self.error_fn = prev_error
+        
+        
 
     def generate(
         self, 

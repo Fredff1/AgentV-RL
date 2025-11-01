@@ -16,41 +16,13 @@ from agentflow.config import load_config
 from agentflow.backend.vllm_logits import VllmChoiceLogitsBackend
 from agentflow.tools.registry import ToolRegistry
 from agentflow.tools.code.python_execution import PythonExecutionTool
-from agentflow.agent.plan import PlanSubtaskAgent
+from agentflow.agent.plan import MultiturnPlanSubtaskAgent
+from agentflow.inference.scorers.base import BoolLogitsScorer
 from agentflow.utils.json_util import JsonUtil
 from agentflow.utils.log_util import get_logger
+from agentflow.utils.tag_util import find_tags
+from agentflow.utils.vllm import free_vllm_mem, SupportVllm
 
-
-SYSTEM_PROMPT = """
-You are a strict verifier-judge responsible for evaluating the solution to a given problem. You will receive a evaluation rollout, which includes the overall evalution plan, individual evalution subtasks, and their corresponding executions. Your task is to rigorously assess the solution by identifying any issues that may arise during the execution of these subtasks. This includes checking for cross-step logical inconsistencies, verifying the alignment of the solution with the required conditions, and ensuring the proper form and consistency throughout the entire solution process.
-
-Write a brief <review> in plain prose. Cover only what matters:
-- Consistency: list all candidate values/expressions for the asked quantity you find; say whether the rollout itself proves them equivalent (cite subtask ids like s2, s4).
-- Bridge: is there a clear chain from premises to the final claim (evidence_alignment or equivalent)? Point out any missing link or leap.
-- Type/Form: does the final claim match the required type/range/form stated in the asked_quantity?
-- Scope: are there hidden assumptions not listed under assumptions_required?
-
-Keep the review compact, factual, and cite subtask ids when referencing steps. Do not explain tools or re-derive math; judge only what’s inside the rollout.
-
-After </review>, output EXACTLY one tag: <answer>true</answer> OR <answer>false</answer>.
-
-Decision rule: if any of the above checks fails (inconsistency, missing bridge, wrong type/form, hidden assumptions), answer <answer>false</answer>; otherwise answer <answer>true</answer>.
-
-Formatting: output ONLY <review>...</review><answer>...</answer>. Lowercase only. No extra text, no code fences.
-"""
-
-USER_PROMPT = """
-The question, answer and agent's rollout:
-{sequence}
-"""
-
-DEFAULT_SEQ_TEMPLATE = """
-### Problem ###
-{problem}
-
-### Solution ###
-{solution}
-"""
 
 logger = get_logger(name = __name__)
 
@@ -85,6 +57,16 @@ def build_sequences_for_block(block: Dict[str, Any], *, join_template: str) -> L
     samples = block.get("samples", []) or []
     return [join_template.format(problem=prompt_text, solution=to_text(s)) for s in samples]
 
+def _to_bool(text: str) -> Optional[bool]:
+    if text is None:
+        return None
+    s = str(text).strip().lower()
+    if s == "true":
+        return True
+    if s == "false":
+        return False
+    return None
+
 @ray.remote(num_gpus=1, max_restarts=2, max_task_retries=1)
 class JudgeWorker:
     def __init__(self, config: Dict[str, Any], system_prompt: str, user_prompt: str):
@@ -96,23 +78,44 @@ class JudgeWorker:
 
         backend = VllmChoiceLogitsBackend(config)
         backend.set_chat_template_defaults(enable_thinking=False)
+        self.backend = backend
         reg = ToolRegistry()
         reg.register(PythonExecutionTool())
-        self.agent = PlanSubtaskAgent(
+        self.agent = MultiturnPlanSubtaskAgent(
             backend=backend,
-            prob_calculator=backend,
             tool_registry=reg,
-            final_user_prompt=user_prompt,
-            final_system_prompt=system_prompt,
         )
+        self.scorer = BoolLogitsScorer(backend)
 
     def score_batch(self, payload: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for item in payload:
-            seqs: List[str] = item["sequences"]
-            scores, metas = self.agent.score(seqs)
+            questions: List[str] = item["questions"]
+            answers: List[str] = item["answers"]
+            msgs, gen_metas = self.agent.generate(questions, answers)
+            verdicts: list[str] = []
+            for msg in msgs:
+                if not msg:
+                    verdicts.append(None)
+                    continue
+                ans_tags = find_tags(msg[-1].content,["answer"])
+                if not ans_tags:
+                    verdicts.append(None)
+                    continue
+                verdicts.append(_to_bool(ans_tags[-1].body))
+            if isinstance(self.backend, SupportVllm):
+                with free_vllm_mem(self.backend):
+                    scores, score_metas = self.agent.score(msgs, self.scorer)
+            else:
+                scores, score_metas = self.agent.score(msgs, self.scorer)
+                
+            for idx, (m, score, verdict) in enumerate(zip(msgs, scores, verdicts)):
+                if not verdict:
+                    scores[idx] = 0
+                
+            metas = [{"process": m, "score": score, "verdict": verdict} for m, score, verdict in zip(msgs, scores, verdicts)]
             metas = JsonUtil.json_sanitize(metas)  
-            out.append({"scores": scores, "metas": metas, "count": len(seqs)})
+            out.append({"scores": scores, "metas": metas, "count": len(questions)})
         return out
 
 
@@ -126,7 +129,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model_path", default=None, type=str)
     p.add_argument("--record-batch-size", type=int, default=16)
     p.add_argument("--append", action="store_true")
-    p.add_argument("--join-template", type=str, default=DEFAULT_SEQ_TEMPLATE)
+    p.add_argument("--join-template", type=str, default="")
     p.add_argument("--judge-system-file", type=str, default=None)
     p.add_argument("--judge-user-file", type=str, default=None)
     p.add_argument("--max-records", type=int, default=None)
@@ -143,8 +146,8 @@ def main():
     args = parse_args()
     ensure_parent_dir(args.output)
 
-    system_prompt = SYSTEM_PROMPT
-    user_prompt = USER_PROMPT
+    system_prompt = ""
+    user_prompt = ""
     if args.judge_system_file:
         with open(args.judge_system_file, "r", encoding="utf-8") as f:
             system_prompt = f.read()
@@ -183,9 +186,11 @@ def main():
             if idx < args.start_idx:
                 continue
             block["idx"] = idx
-            seqs = build_sequences_for_block(block, join_template=args.join_template)
+            question: str = block.get("question", "")
+            samples = block.get("samples", []) or []
+            questions = [question for _ in range(len(samples))]
             cur_blocks.append(block)
-            cur_payload.append({"sequences": seqs})
+            cur_payload.append({"questions": questions, "answers": samples})
         return cur_payload, cur_blocks
     
     def pick_worker(inflight: List[Tuple[int, "ray.ObjectRef", List[Dict[str, Any]]]],
@@ -258,7 +263,7 @@ def main():
                 logger.info(f"Worker#{wid} finished task with idx {idx}")
                 evaluations: List[Dict[str, Any]] = blk_out.get("evaluations") or [dict() for _ in range(L)]
                 for eva, meta, score in zip(evaluations, metas, scores):
-                    eva["judge"] = meta.get("judge")
+                    eva["judge"] = meta.get("verdict")
                     eva["score"] = score
                 blk_out["evaluations"] = evaluations
 
@@ -287,7 +292,7 @@ def main():
             #         write_mode = "a"
             #     write_buffer.clear()
                 
-            while len(pending_heap) >= num_workers:
+            while len(pending_heap) >= 1:
                 if not flush_ready():
                     break
 

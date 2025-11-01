@@ -6,8 +6,9 @@ import logging
 
 
 from .context import AgentContext
-from agentflow.core.interfaces import CanGenerate, CanChoiceProbs, CanRMScores
+from agentflow.core.interfaces import CanGenerate, CanChoiceProbs, CanRMScores, SupportChatTemplate
 from agentflow.inference.scorers.generative_scorer import BoolLogitsGenerativeScorer
+from agentflow.inference.scorers.base import BoolLogitsScorer
 from agentflow.common.messages import Message, trans_messages_to_standard, trans_messages_to_text
 from agentflow.tools.base import ToolCallResult
 from agentflow.tools.code.python_execution import PythonExecutionTool
@@ -77,6 +78,304 @@ def _to_bool(text: str) -> Optional[bool]:
     if s == "false":
         return False
     return None
+
+class MultiturnPlanSubtaskAgent:
+    
+    DEFAULT_SYSTEM="""You are a Verifier agent performing multi-turn verification of a math problem’s solution.
+Your mission: determine whether the given solution is correct. Always be strict, skeptical, and evidence-driven.
+Keep responses concise. Follow the exact XML tag requirements.
+
+You must finish the job in three stages:
+
+## Stage A: Task Analysis & Extraction
+Analyze the original question and the given solution. Decompose the verification into smaller, checkable steps.
+
+## Stage B: Solution Analysis & Judgment
+Execute the planned verification steps one by one in multiple turns. For each step, analyze and judge strictly.
+If you find any mistake at any step, STOP this stage immediately and proceed to Stage C.
+
+## Stage C: Final Review & Verdict
+Review all prior analyses. Provide a final boolean verdict indicating whether the original solution correctly solves the question.
+
+General rules (VERY IMPORTANT):
+- Never assume unstated facts. Cite the exact parts of the question/solution you use.
+- If a step relies on an unjustified assumption, treat it as a FAIL.
+- Arithmetic/units/bounds must be explicitly checked when relevant.
+- XML tags must be exact and well-formed. Do not invent new tags.
+- Stage B is the ONLY stage where Python may be used. If you use Python in a turn, output ONLY:
+<python>
+imports...
+code...
+</python>
+  (No extra text in that turn. Avoid input(), OS commands, file I/O, network, and infinite loops.)
+- When a single step is finished (no Python in that turn), output <step/> on its own line.
+- When all steps are done, output <end_of_analysis/> on its own line.
+- In Stage C, output two tags only: <review>...</review> and <answer>true|false</answer>."""
+    
+    DEFAULT_USER_INIT = """Stage A: Task Analysis & Extraction
+
+## Original Question
+{question}
+
+## Original Solution (to be verified)
+{answer}
+
+In this stage, given the question and the solution above, you are required to:
+
+1) Extract ALL variables, numerical values, units, and explicit/implicit constraints used in the question OR the solution.
+2) Provide a breakdown of the original question: what is being asked, which parts map to which variables/constraints, and the target quantity.
+3) Provide a breakdown of the original solution: the approach/plan, assumptions, how variables/constraints are applied, and key calculations/steps.
+4) Based on the above, list each verification step you will check in subsequent stages (numbered).
+5) Provide a preliminary judgment: “likely correct”, “likely incorrect”, or “undetermined”, with a brief reason.
+
+Your output must follow this exact format:
+
+<vars>...</vars>
+<constraints>...</constraints>
+<question_breakdown>...</question_breakdown>
+<solution_breakdown>...</solution_breakdown>
+<verification_steps>
+  <step id="1">...</step>
+  <step id="2">...</step>
+  ...
+</verification_steps>
+<preliminary_judgment>...</preliminary_judgment>
+
+Be concise but sufficiently specific to enable strict verification later.
+"""
+
+    DEFAULT_USER_STAGE_SUBTASK_BEGIN="""Stage B: Solution Analysis & Judgment
+
+You will now begin multi-turn verification of the planned steps from Stage A, one step per turn if necessary.
+
+Rules for this stage:
+- For each step, provide a concise analysis. Be skeptical and check assumptions, arithmetic, units, bounds, and logical coherence.
+- If you need to verify with Python, output EXACTLY and ONLY the left alligned code:
+<python>
+import math
+# your code here
+</python>
+  The code must be right-aligned (indent code consistently to the right), contain necessary imports, and avoid input(), OS commands, file I/O, network, or infinite loops. The code is executed in a sandbox; only stdout will be returned.
+- If you do NOT use Python in that turn and you have finished the current step’s analysis, output <step/> on its own line to continue to the next step.
+- If you detect any mistake at any step, STOP Stage B immediately and proceed to Stage C (you will be prompted). Do NOT continue analyzing further steps.
+- When ALL steps are completed with no mistakes found, output <end_of_analysis/> on its own line.
+
+Begin with the first planned verification step. Keep it concise and strictly evidence-based.
+    """
+    
+    DEFAULT_USER_STAGE_SUBTASK_MIDDLE=""" Stage B: Solution Analysis & Judgment (continue)
+
+Now continue to verify the next planned step. Keep the same strict rules:
+- If you need Python, output ONLY a <python>...</python> block in this turn.
+- Otherwise, finish the step and output <step/> to move on.
+- If any mistake is found, STOP Stage B and await Stage C prompt.
+Be concise and strictly evidence-based.
+    """
+    
+    DEFAULT_USER_STAGE_REVIEW_MIDDLE="""Stage C: Final Review & Verdict
+
+Given all prior analyses, provide the final review and the boolean verdict.
+
+Requirements:
+- Summarize errors found OR explain why the solution appears trustworthy, in:
+<review>...</review>
+
+- Then give the final boolean verdict in:
+<answer>true|false</answer>
+
+Notes:
+- “true” means the original solution correctly solves the question.
+- “false” means the original solution is incorrect OR insufficiently justified.
+- Do NOT use Python in this stage. Keep it concise and definitive.
+    """
+    
+    def __init__(
+        self,
+        backend: CanGenerate,
+        max_rounds: int = 8,
+        max_rounds_per_block: int = 3,
+        tool_registry: Optional[ToolRegistry] = None,
+        system_prompt: Optional[str] = None,
+    ):
+        super().__init__()
+        self.backend = backend
+        registry = tool_registry or ToolRegistry()
+        py_tool = PythonExecutionTool(use_tqdm=False)
+        registry.register(py_tool)
+        tool_caller = ToolCaller(registry, TagToolParser())
+        self.max_rounds = max_rounds
+        self.max_rounds_per_block = max_rounds_per_block
+        
+        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM
+        
+        self.agent = ToolDrivenAgent(
+            backend=backend,
+            tool_caller = tool_caller,
+            finish_fn = self._stage_task_analysis,
+            error_fn = self._stage_task_analysis_has_error,
+            max_rounds = max_rounds_per_block
+        )
+        
+    def generate(
+        self,
+        questions: List[str],
+        answers: List[str],
+        **kwargs,
+    ) -> Tuple[List[List[Message]], List[Dict]]:
+        
+        assert len(questions)==len(answers), "Questioins and answers should be in the same size"
+        # stage 1
+        start_msgs = [[
+            {"role":"system","content": self.system_prompt},
+            {"role":"user","content": self.DEFAULT_USER_INIT.format(question = q, answer = a)}
+        ] for q, a in zip(questions, answers)]
+        
+        full_msgs = [Message.from_dicts(msgs) for msgs in start_msgs]
+        
+        resps, gen_metas = self.agent.generate(start_msgs)
+        gen_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
+        for idx, (resp, context) in enumerate(zip(resps, gen_contexts)):
+            full_msgs[idx].extend(context.all_round_messages())
+            
+        # stage 2
+        for fms, answer in zip(full_msgs, answers):
+            fms.append(Message(role="user",content=self.DEFAULT_USER_STAGE_SUBTASK_BEGIN))
+        
+        subtask_rounds = 0
+        active_subtasks_idxs = list(range(len(questions)))
+        while(active_subtasks_idxs and subtask_rounds < self.max_rounds - 2):
+            subtask_rounds += 1
+            input_msgs = []
+            for indice in active_subtasks_idxs:
+                input_msgs.append(trans_messages_to_standard(full_msgs[indice]))
+                
+            with self.agent.using_func(
+                finish_fn=self._stage_subtask,
+                error_fn=self._stage_subtask_has_error
+            ):
+                resps, gen_metas = self.agent.generate(input_msgs)
+                curr_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
+            
+            next_active_idxs = []
+            for indice, curr_context in zip(active_subtasks_idxs, curr_contexts):
+                full_msgs[indice].extend(curr_context.all_round_messages())
+                
+                end_flag = self._review_stage_gate(curr_context)
+                if not end_flag:
+                    full_msgs[indice].append(Message("user",self.DEFAULT_USER_STAGE_SUBTASK_MIDDLE))
+                    next_active_idxs.append(indice)
+                    
+            active_subtasks_idxs = next_active_idxs
+            
+        # stage 3
+        for fms, answer in zip(full_msgs, answers):
+            fms.append(Message(role="user",content=self.DEFAULT_USER_STAGE_REVIEW_MIDDLE))
+            
+        input_msgs = [trans_messages_to_standard(msgs) for msgs in full_msgs]
+            
+        with self.agent.using_func(
+            finish_fn=self._stage_review,
+            error_fn=self._stage_review_has_error
+        ):
+            resps, gen_metas = self.agent.generate(input_msgs)
+            curr_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
+        
+        for idx, (resp, context) in enumerate(zip(resps, curr_contexts)):
+            full_msgs[idx].extend(context.all_round_messages())
+            
+        
+        return full_msgs, [{} for _ in range(len(questions))]
+    
+    def score(self, full_msgs: List[List[Message]], scorer: BoolLogitsScorer):
+        
+        std_msgs = [trans_messages_to_standard(msgs) for msgs in full_msgs]
+        
+        if isinstance(self.agent.backend, SupportChatTemplate):
+            texts: List[str] = self.agent.backend.apply_chat_template(std_msgs)
+        else:
+            texts: List[str] = [trans_messages_to_text(msg) for msg in full_msgs]
+            
+        scores, metas = scorer.score(texts)
+        
+        return scores, metas
+            
+        
+        
+        
+    def _stage_task_analysis(
+        self,
+        context: AgentContext
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["verification_steps"])
+        if cands:
+            return True
+        else:
+            return False
+        
+    def _stage_task_analysis_has_error(
+        self,
+        context: AgentContext
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["verification_steps"])
+        if cands:
+            return False
+        else:
+            return True
+        
+    def _stage_subtask(
+        self,
+        context: AgentContext
+    ):
+        last_msg = context.last_message()
+        if "<step/>" in last_msg.content:
+            return True
+        else:
+            return False
+        
+    def _stage_subtask_has_error(
+        self,
+        context: AgentContext
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["step", "python"])
+        if cands:
+            return False
+        else:
+            return True
+        
+    def _review_stage_gate(
+        self,
+        context: AgentContext
+    ):
+        last_msg = context.last_message()
+        if "<end_of_analysis/>" in last_msg.content:
+            return True
+        else:
+            return False
+        
+    def _stage_review(
+        self,
+        context: AgentContext        
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["answer"])
+        if cands:
+            return True
+        else:
+            return False
+        
+    def _stage_review_has_error(
+        self,
+        context: AgentContext        
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["answer"])
+        if cands:
+            return False
+        else:
+            return True
 
 class PlanSubtaskAgent(CanRMScores):
     

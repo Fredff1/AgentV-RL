@@ -187,11 +187,13 @@ class vLLMRollout(BaseRollout):
         # Offload vllm model to reduce peak memory usage
         if config.free_cache_engine:
             self.inference_engine.sleep(level=1)
+            
+        max_tokens_ = config.get("max_tokens",None)
 
         kwargs = dict(
             n=1,
             logprobs=0,  # can be set to 0 and let actor to recompute
-            max_tokens=config.response_length,
+            max_tokens=max_tokens_ or config.response_length,
         )
 
         kwargs["detokenize"] = False

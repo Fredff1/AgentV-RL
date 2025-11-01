@@ -86,6 +86,7 @@ class PythonExecutionTool(BaseTool):
         res = self.executor.run(plan)
 
         out = f"Console: {res.stdout}\nResult: {res.result}"
+        out = out[:2000] + "...(trunc)"
         rep = "Execution Success" if res.ok else f"Execution Failed\n{res.error}"
         meta_out = {
             "success": bool(res.ok),
@@ -117,6 +118,7 @@ class PythonExecutionTool(BaseTool):
             packed: List[ToolCallResult] = []
             for res, c in zip(results, allowed_calls):
                 out = f"Console: {res.stdout}\nResult: {res.result}"
+                out = out[:2000] + "...(trunc)"
                 rep = "Execution Success" if res.ok else f"Execution Failed\n{res.error}"
                 meta_out = {"success": bool(res.ok), "error": res.error, "duration_s": res.duration_s}
                 packed.append(ToolCallResult(
