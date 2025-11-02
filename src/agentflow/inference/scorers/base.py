@@ -20,12 +20,14 @@ class BoolLogitsScorer(CanRMScores):
         prob_bs: int = 1,
         choice_labels: Sequence[str] = ("true", "false"), 
         eps: float = 1e-15,   
+        max_length: Optional[int] = None,
     ):
         super().__init__()
         self.prob_calculator = prob_calculator
         self.prob_bs = max(1, int(prob_bs))
         self.choice_labels = tuple(choice_labels)
         self.eps = eps
+        self.max_length = max_length or 25600
         
         
     def _chunk(self, xs: Sequence[Any], n: int):
@@ -41,9 +43,13 @@ class BoolLogitsScorer(CanRMScores):
         """分批调用 prob_calculator.choice_probs，保持顺序不变。"""
         all_probs: List[List[float]] = []
         for _, pref_chunk in self._chunk(prefixes, self.prob_bs):
+            input_chunks = []
+            for i in range(len(pref_chunk)):
+                input_chunks.append(pref_chunk[i][-self.max_length:])
+                
             choices_chunk = [list(labels) for _ in range(len(pref_chunk))]
             try:
-                probs_chunk = self.prob_calculator.choice_probs(pref_chunk, choices_chunk, **kw)
+                probs_chunk = self.prob_calculator.choice_probs(input_chunks, choices_chunk, **kw)
             except Exception:
                 probs_chunk = [[0.0 for _ in labels] for _ in range(len(pref_chunk))]
             probs_chunk = [list(map(float, p)) for p in probs_chunk]

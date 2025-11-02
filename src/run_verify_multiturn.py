@@ -109,13 +109,19 @@ class JudgeWorker:
             else:
                 scores, score_metas = self.agent.score(msgs, self.scorer)
                 
+            extras = []
+                
             for idx, (m, score, verdict) in enumerate(zip(msgs, scores, verdicts)):
                 if not verdict:
                     scores[idx] = 0
+                tool_counts = 0
                 for message in m:
                     message.dict_data = None
+                    if message.role == "tool":
+                        tool_counts += 1
+                extras.append({"tool_counter":tool_counts})
                 
-            metas = [{"process": m, "score": score, "verdict": verdict} for m, score, verdict in zip(msgs, scores, verdicts)]
+            metas = [{"process": m, "score": score, "verdict": verdict, "extra": e} for m, score, verdict, e in zip(msgs, scores, verdicts, extras)]
             metas = JsonUtil.json_sanitize(metas)  
             out.append({"scores": scores, "metas": metas, "count": len(questions)})
         return out

@@ -42,6 +42,16 @@ class Message:
             ))
         return msgs
     
+    @classmethod
+    def to_dicts(cls, messages: List[Message]) -> List[Dict[str,str]]:
+       return trans_messages_to_standard(messages)
+    
+    @classmethod
+    def batch_to_dicts(cls, messages: List[List[Message]]) -> List[List[Dict[str,str]]]:
+        result = [trans_messages_to_standard(msg) for msg in messages]
+        return result
+        
+    
     
 def trans_messages_to_standard(
     messages: List['Message'], 

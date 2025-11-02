@@ -214,7 +214,7 @@ class VllmChoiceLogitsBackend(ChatTemplateDefaultsMixin, CanGenerate, CanChoiceP
             probs = torch.softmax(total_logprob_per_sample, dim=0)  
             all_group_probs.append(probs.detach().cpu().tolist())
             del outputs, shifted_labels, mask,token_log_probs,total_logprob_per_sample
-            del input_ids_tensor, labels_tensor, attention_mask_tensor
+            del input_ids_tensor, labels_tensor, attention_mask_tensor, probs
             torch.cuda.empty_cache()
 
 
