@@ -149,27 +149,29 @@ Be concise but sufficiently specific to enable strict verification later.
 You will now begin multi-turn verification of the planned steps from Stage A, one step per turn if necessary.
 
 Rules for this stage:
-- For each step, provide a concise analysis. Be skeptical and check assumptions, arithmetic, units, bounds, and logical coherence.
-- If you need to verify with Python, output EXACTLY and ONLY the left alligned code:
+- For each step, provide a detailed analysis with careful reasoning via <think>reasoning process</think> block. Be skeptical and check assumptions, arithmetic, units, bounds, and IMPROTANTLY logical coherence.
+- If you realize that the planned steps are insufficient, you MAY introduce a NEW step. To declare a new step, start the <think> block with:
+  <new_step reason="..."/>
+  Then continue your reasoning in the same <think> block. End this newly added step with <step/> as usual, and continue to verify the next planned step.
+- If you need to verify with Python after your reasoning, output the left alligned code inside a <python> tag after the <think> tag:
 <python>
 import math
 # your code here
 </python>
-  The code must be right-aligned (indent code consistently to the right), contain necessary imports, and avoid input(), OS commands, file I/O, network, or infinite loops. The code is executed in a sandbox; only stdout will be returned.
-- If you do NOT use Python in that turn and you have finished the current step’s analysis, output <step/> on its own line to continue to the next step.
-- If you detect any mistake at any step, STOP Stage B immediately and proceed to Stage C (you will be prompted). Do NOT continue analyzing further steps.
+- The code must be left-aligned, contain necessary imports, and avoid input(), OS commands, file I/O, network, or infinite loops. The code is executed in a sandbox; only stdout will be returned.
+- Use python tools only when it is necessary.
+- If you do NOT use Python in that turn and you have finished the current step’s analysis, output <step/> after <think></think> to continue to the next step.
+- If you detect any mistake at any step, STOP Stage B immediately and proceed to Stage C (you will be prompted). 
 - When ALL steps are completed with no mistakes found, output <end_of_analysis/> on its own line.
+- Python tools can only be used twice per step(including failure), calls with exceeded quota will result in error.
 
 Begin with the first planned verification step. Keep it concise and strictly evidence-based.
     """
     
     DEFAULT_USER_STAGE_SUBTASK_MIDDLE=""" Stage B: Solution Analysis & Judgment (continue)
 
-Now continue to verify the next planned step. Keep the same strict rules:
-- If you need Python, output ONLY a <python>...</python> block in this turn.
-- Otherwise, finish the step and output <step/> to move on.
-- If any mistake is found, STOP Stage B and await Stage C prompt.
-Be concise and strictly evidence-based.
+Now continue to verify the next planned step or inject a new step to verify. 
+Reason carefully, and be concise and strictly evidence-based.
     """
     
     DEFAULT_USER_STAGE_REVIEW_MIDDLE="""Stage C: Final Review & Verdict
@@ -193,7 +195,7 @@ Notes:
         self,
         backend: CanGenerate,
         max_rounds: int = 8,
-        max_rounds_per_block: int = 3,
+        max_rounds_per_block: int = 6,
         tool_registry: Optional[ToolRegistry] = None,
         system_prompt: Optional[str] = None,
     ):
@@ -243,7 +245,7 @@ Notes:
         
         subtask_rounds = 0
         active_subtasks_idxs = list(range(len(questions)))
-        while(active_subtasks_idxs and subtask_rounds < self.max_rounds - 2):
+        while (active_subtasks_idxs and subtask_rounds < self.max_rounds - 2):
             subtask_rounds += 1
             input_msgs = []
             for indice in active_subtasks_idxs:
@@ -329,16 +331,23 @@ Notes:
         context: AgentContext
     ):
         last_msg = context.last_message()
-        if "<step/>" in last_msg.content:
-            return True
-        else:
+        has_tag = ("<step/>" in last_msg.content)
+        cands = find_tags(last_msg.content, ["python"])
+        if cands :
             return False
+        else:
+            if has_tag:
+                return True
+            return False
+
         
     def _stage_subtask_has_error(
         self,
         context: AgentContext
     ):
         last_msg = context.last_message()
+        if "<step/>" in last_msg.content:
+            return False
         cands = find_tags(last_msg.content, ["step", "python"])
         if cands:
             return False

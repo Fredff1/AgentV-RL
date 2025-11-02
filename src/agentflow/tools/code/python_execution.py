@@ -85,8 +85,10 @@ class PythonExecutionTool(BaseTool):
         plan = ExecPlan(code=str(call.content), capture_mode=cap, answer_symbol=symbol, answer_expr=expr)
         res = self.executor.run(plan)
 
-        out = f"Console: {res.stdout}\nResult: {res.result}"
-        out = out[:2000] + "...(trunc)"
+        out = f"Stdout: {res.stdout}\nStatus: {res.result}"
+        if len(out) > 2000:
+            out = out[:2000] + "...(trunc)"
+            
         rep = "Execution Success" if res.ok else f"Execution Failed\n{res.error}"
         meta_out = {
             "success": bool(res.ok),
@@ -117,8 +119,9 @@ class PythonExecutionTool(BaseTool):
             results = self.executor.run_many(plans, show_progress=self.use_tqdm)
             packed: List[ToolCallResult] = []
             for res, c in zip(results, allowed_calls):
-                out = f"Console: {res.stdout}\nResult: {res.result}"
-                out = out[:2000] + "...(trunc)"
+                out = f"Stdout: {res.stdout}\nStatus: {res.result}"
+                if len(out) > 2000:
+                    out = out[:2000] + "...(trunc)"
                 rep = "Execution Success" if res.ok else f"Execution Failed\n{res.error}"
                 meta_out = {"success": bool(res.ok), "error": res.error, "duration_s": res.duration_s}
                 packed.append(ToolCallResult(

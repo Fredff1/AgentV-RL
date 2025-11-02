@@ -112,6 +112,8 @@ class JudgeWorker:
             for idx, (m, score, verdict) in enumerate(zip(msgs, scores, verdicts)):
                 if not verdict:
                     scores[idx] = 0
+                for message in m:
+                    message.dict_data = None
                 
             metas = [{"process": m, "score": score, "verdict": verdict} for m, score, verdict in zip(msgs, scores, verdicts)]
             metas = JsonUtil.json_sanitize(metas)  
@@ -143,6 +145,9 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 def main():
+    import multiprocessing as mp
+    if mp.get_start_method(allow_none=True) != "spawn":
+        mp.set_start_method("spawn", force=True)
     args = parse_args()
     ensure_parent_dir(args.output)
 
