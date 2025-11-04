@@ -385,6 +385,154 @@ Notes:
             return False
         else:
             return True
+        
+class BackwardVerifyAgent:
+    
+    DEFAULT_SYSTEM="""You are a strict backward verifier. 
+Given a question and a proposed answer, check step by step if it can be fully supported by the problem statement when reasoning backward.
+
+Rules:
+- You MUST first produce <goal>, <backtrace>, <evidence>, <conflicts>, <checklist> in this order, then give exactly one <answer>.
+- Only output <answer>false</answer> if you explicitly present at least one <gap .../> in <evidence> or a <conflict .../> in <conflicts>, with a quoted reference showing why the match failed.
+- Output <answer>true</answer> if all necessary premises are matched OR are reasonably inferable by elementary arithmetic/definitions/common-sense for this task domain.
+- Minor omissions that do not affect the conclusion (e.g., obvious algebra steps, universally known definitions) DO NOT count as gaps.
+- Respond in XML-like tags only. Always include <answer> at the end (after other tags).
+Tags you may use: <goal>, <backtrace>, <evidence>, <conflicts>, <step>, <checklist>, <answer>.
+Do NOT add any other text outside tags.
+
+Example A:
+<goal>sum equals 42</goal>
+<backtrace>requires a+b=42</backtrace>
+<evidence><ok premise="a=20"><quote>a=20</quote></ok><ok premise="b=22"><quote>b=22</quote></ok></evidence>
+<conflicts></conflicts>
+<checklist><coverage>100</coverage><has_gap>false</has_gap><has_conflict>false</has_conflict></checklist>
+<answer>true</answer>
+
+Example B:
+<goal>x is prime</goal>
+<backtrace>requires x>1 and no divisors 2..sqrt(x)</backtrace>
+<evidence>
+  <ok premise="x>1"><quote>x=17 (>1)</quote></ok>
+  <gap premise="no divisors check">no enumeration of divisors given</gap>
+</evidence>
+<conflicts></conflicts>
+<checklist><coverage>50</coverage><has_gap>true</has_gap><has_conflict>false</has_conflict></checklist>
+<answer>false</answer>"""
+
+    DEFAULT_USER_INIT="""<problem>
+{question}
+</problem>
+<proposed_answer>
+{answer}
+</proposed_answer>
+
+You should use tags in the following rules.
+
+<goal>Extract the final claims from the proposed answer.</goal>
+<backtrace>For each claim, list minimal necessary premises to make it true.</backtrace>
+<evidence>
+  For each premise, first try to match it to the problem or previously derived steps.
+  If matched, write <ok premise="..."><quote>...</quote></ok> quoting the exact support.
+  If a concrete match fails, write <gap premise="...">why it fails</gap>.
+</evidence>
+<conflicts>List any contradictions as <conflict target="..."><quote>...</quote></conflict>.</conflicts>
+<checklist>
+  <coverage>OK-premises / total-premises as an integer percentage</coverage>
+  <has_gap>true|false</has_gap>
+  <has_conflict>true|false</has_conflict>
+  <decision_rule>
+    If has_conflict=true → answer=false.
+    Else if has_gap=true AND coverage < 90 → answer=false.
+    Else → answer=true.
+  </decision_rule>
+</checklist>
+
+Output your final decision as <answer>true|false</answer> only once at the end."""
+    
+    def __init__(
+        self,
+        backend: CanGenerate,
+        max_rounds: int = 8,
+        max_rounds_per_block: int = 6,
+        tool_registry: Optional[ToolRegistry] = None,
+        system_prompt: Optional[str] = None,
+    ):
+        super().__init__()
+        self.backend = backend
+        registry = tool_registry or ToolRegistry()
+        py_tool = PythonExecutionTool(use_tqdm=False)
+        registry.register(py_tool)
+        tool_caller = ToolCaller(registry, TagToolParser())
+        self.max_rounds = max_rounds
+        self.max_rounds_per_block = max_rounds_per_block
+        
+        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM
+        
+        self.agent = ToolDrivenAgent(
+            backend=backend,
+            tool_caller = tool_caller,
+            finish_fn = self._stage_review,
+            error_fn = self._stage_review_has_error,
+            max_rounds = max_rounds_per_block
+        )
+        
+    def generate(
+        self,
+        questions: List[str],
+        answers: List[str],
+        **kwargs,
+    ) -> Tuple[List[List[Message]], List[Dict]]:
+        assert len(questions)==len(answers), "Questioins and answers should be in the same size"
+        # stage 1
+        start_msgs = [[
+            {"role":"system","content": self.system_prompt},
+            {"role":"user","content": self.DEFAULT_USER_INIT.format(question = q, answer = a)}
+        ] for q, a in zip(questions, answers)]
+        
+        full_msgs = [Message.from_dicts(msgs) for msgs in start_msgs]
+        
+        resps, gen_metas = self.agent.generate(start_msgs)
+        gen_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
+        for idx, (resp, context) in enumerate(zip(resps, gen_contexts)):
+            full_msgs[idx].extend(context.all_round_messages())
+        
+        return full_msgs, [{} for _ in range(len(questions))]
+    
+    def score(self, full_msgs: List[List[Message]], scorer: BoolLogitsScorer):
+        
+        std_msgs = [trans_messages_to_standard(msgs) for msgs in full_msgs]
+        
+        if isinstance(self.agent.backend, SupportChatTemplate):
+            texts: List[str] = self.agent.backend.apply_chat_template(std_msgs)
+        else:
+            texts: List[str] = [trans_messages_to_text(msg) for msg in full_msgs]
+            
+        scores, metas = scorer.score(texts)
+        
+        return scores, metas
+    
+    def _stage_review(
+        self,
+        context: AgentContext        
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["answer"])
+        if cands:
+            return True
+        else:
+            return False
+        
+    def _stage_review_has_error(
+        self,
+        context: AgentContext        
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["answer"])
+        if cands:
+            return False
+        else:
+            return True
+    
 
 class PlanSubtaskAgent(CanRMScores):
     
