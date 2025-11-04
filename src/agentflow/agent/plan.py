@@ -91,16 +91,12 @@ You must finish the job in three stages:
 Analyze the original question and the given solution. Decompose the verification into smaller, checkable steps.
 
 ## Stage B: Solution Analysis & Judgment
-Execute the planned verification steps one by one in multiple turns. For each step, analyze and judge strictly.
-If you find any mistake at any step, STOP this stage immediately and proceed to Stage C.
+Execute the planned verification steps one by one in multiple turns.
 
 ## Stage C: Final Review & Verdict
 Review all prior analyses. Provide a final boolean verdict indicating whether the original solution correctly solves the question.
 
 General rules (VERY IMPORTANT):
-- Never assume unstated facts. Cite the exact parts of the question/solution you use.
-- If a step relies on an unjustified assumption, treat it as a FAIL.
-- Arithmetic/units/bounds must be explicitly checked when relevant.
 - XML tags must be exact and well-formed. Do not invent new tags.
 - Stage B is the ONLY stage where Python may be used. If you use Python in a turn, output ONLY:
 <python>
@@ -140,8 +136,6 @@ Your output must follow this exact format:
   ...
 </verification_steps>
 <preliminary_judgment>...</preliminary_judgment>
-
-Be concise but sufficiently specific to enable strict verification later.
 """
 
     DEFAULT_USER_STAGE_SUBTASK_BEGIN="""Stage B: Solution Analysis & Judgment
@@ -149,7 +143,7 @@ Be concise but sufficiently specific to enable strict verification later.
 You will now begin multi-turn verification of the planned steps from Stage A, one step per turn if necessary.
 
 Rules for this stage:
-- For each step, provide a detailed analysis with careful reasoning via <think>reasoning process</think> block. Be skeptical and check assumptions, arithmetic, units, bounds, and IMPROTANTLY logical coherence.
+- For each step, provide a detailed analysis with careful reasoning via <think> reasoning process </think> block. Check assumptions, arithmetic, units, bounds, and IMPROTANTLY logical coherence.
 - If you realize that the planned steps are insufficient, you MAY introduce a NEW step. To declare a new step, start the <think> block with:
   <new_step reason="..."/>
   Then continue your reasoning in the same <think> block. End this newly added step with <step/> as usual, and continue to verify the next planned step.
@@ -161,17 +155,15 @@ import math
 - The code must be left-aligned, contain necessary imports, and avoid input(), OS commands, file I/O, network, or infinite loops. The code is executed in a sandbox; only stdout will be returned.
 - Use python tools only when it is necessary.
 - If you do NOT use Python in that turn and you have finished the current step’s analysis, output <step/> after <think></think> to continue to the next step.
-- If you detect any mistake at any step, STOP Stage B immediately and proceed to Stage C (you will be prompted). 
 - When ALL steps are completed with no mistakes found, output <end_of_analysis/> on its own line.
 - Python tools can only be used twice per step(including failure), calls with exceeded quota will result in error.
 
-Begin with the first planned verification step. Keep it concise and strictly evidence-based.
+Begin with the first planned verification step.
     """
     
     DEFAULT_USER_STAGE_SUBTASK_MIDDLE=""" Stage B: Solution Analysis & Judgment (continue)
 
 Now continue to verify the next planned step or inject a new step to verify. 
-Reason carefully, and be concise and strictly evidence-based.
     """
     
     DEFAULT_USER_STAGE_REVIEW_MIDDLE="""Stage C: Final Review & Verdict
@@ -183,13 +175,7 @@ Requirements:
 <review>...</review>
 
 - Then give the final boolean verdict in:
-<answer>true|false</answer>
-
-Notes:
-- “true” means the original solution correctly solves the question.
-- “false” means the original solution is incorrect OR insufficiently justified.
-- Do NOT use Python in this stage. Keep it concise and definitive.
-    """
+<answer>true|false</answer>"""
     
     def __init__(
         self,
@@ -388,7 +374,7 @@ Notes:
         
 class BackwardVerifyAgent:
     
-    DEFAULT_SYSTEM="""You are a strict backward verifier. 
+    DEFAULT_SYSTEM="""You are a backward verifier. 
 Given a question and a proposed answer, check step by step if it can be fully supported by the problem statement when reasoning backward.
 
 Rules:
@@ -398,26 +384,7 @@ Rules:
 - Minor omissions that do not affect the conclusion (e.g., obvious algebra steps, universally known definitions) DO NOT count as gaps.
 - Respond in XML-like tags only. Always include <answer> at the end (after other tags).
 Tags you may use: <goal>, <backtrace>, <evidence>, <conflicts>, <step>, <checklist>, <answer>.
-Do NOT add any other text outside tags.
-
-Example A:
-<goal>sum equals 42</goal>
-<backtrace>requires a+b=42</backtrace>
-<evidence><ok premise="a=20"><quote>a=20</quote></ok><ok premise="b=22"><quote>b=22</quote></ok></evidence>
-<conflicts></conflicts>
-<checklist><coverage>100</coverage><has_gap>false</has_gap><has_conflict>false</has_conflict></checklist>
-<answer>true</answer>
-
-Example B:
-<goal>x is prime</goal>
-<backtrace>requires x>1 and no divisors 2..sqrt(x)</backtrace>
-<evidence>
-  <ok premise="x>1"><quote>x=17 (>1)</quote></ok>
-  <gap premise="no divisors check">no enumeration of divisors given</gap>
-</evidence>
-<conflicts></conflicts>
-<checklist><coverage>50</coverage><has_gap>true</has_gap><has_conflict>false</has_conflict></checklist>
-<answer>false</answer>"""
+"""
 
     DEFAULT_USER_INIT="""<problem>
 {question}
@@ -440,11 +407,6 @@ You should use tags in the following rules.
   <coverage>OK-premises / total-premises as an integer percentage</coverage>
   <has_gap>true|false</has_gap>
   <has_conflict>true|false</has_conflict>
-  <decision_rule>
-    If has_conflict=true → answer=false.
-    Else if has_gap=true AND coverage < 90 → answer=false.
-    Else → answer=true.
-  </decision_rule>
 </checklist>
 
 Output your final decision as <answer>true|false</answer> only once at the end."""

@@ -127,6 +127,7 @@ class JudgeWorker:
                 if not verdict:
                     forward_scores[idx] = 0
                     final_scores[idx] = 0
+                    backward_samples.append(idx)
                 else:
                     backward_samples.append(idx)
                 tool_counts = 0
@@ -189,7 +190,7 @@ class JudgeWorker:
                     extras[idx]["backward"] =  {"tool_counter":tool_counts, "process": bmsg, "score":bscore, "verdict":bverdict}
                 
             
-            metas = [{"score": score, "verdict": verdict, "extra": e} for score, verdict, e in zip(final_scores, final_verdicts, extras)]
+            metas = [{"score": score, "verdict": verdict, "id": idx,"extra": e} for idx, (score, verdict, e) in enumerate(zip(final_scores, final_verdicts, extras))]
             metas = JsonUtil.json_sanitize(metas)  
             out.append({"scores": final_scores, "metas": metas, "count": len(questions)})
         return out
@@ -344,6 +345,7 @@ def main():
                 for eva, meta, score in zip(evaluations, metas, scores):
                     eva["judge"] = meta.get("verdict")
                     eva["score"] = score
+                    meta["eval"] = eva
                 blk_out["evaluations"] = evaluations
 
                 if args.include_full_meta:
