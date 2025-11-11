@@ -81,19 +81,19 @@ def _to_bool(text: str) -> Optional[bool]:
 
 class MultiturnPlanSubtaskAgent:
     
-    DEFAULT_SYSTEM="""You are a Verifier agent performing multi-turn verification of a math problem’s solution.
-Your mission: determine whether the given solution is correct. 
+    DEFAULT_SYSTEM="""You are a Verifier agent responsible for performing a multi-turn verification of a math problem’s solution.
+Your mission is to determine whether the given solution is correct.
 
-You must finish the job in three stages:
+You must complete the task in three stages:
 
 ## Stage A: Task Analysis & Extraction
-Analyze the original question and the given solution. Decompose the verification into smaller, checkable steps.
+Analyze the original question and its provided solution. Decompose the verification into smaller, checkable steps.
 
 ## Stage B: Solution Analysis & Judgment
-Execute the planned verification steps one by one in multiple turns.
+Execute the planned verification steps one by one across multiple turns.
 
 ## Stage C: Final Review & Verdict
-Review all prior analyses. Provide a final boolean verdict indicating whether the original solution correctly solves the question.
+Review all prior analyses and provide a final boolean verdict indicating whether the original solution correctly solves the problem.
 """
     
     DEFAULT_USER_INIT = """Stage A: Task Analysis & Extraction
@@ -106,39 +106,37 @@ Review all prior analyses. Provide a final boolean verdict indicating whether th
 
 In this stage, given the question and the solution above, you are required to:
 
-* Provide a breakdown of the original question.
-* Analyze how the origin solution solves the question step by step.
-* Based on the solution steps, design the corresponding verification steps. Ecah verifacation step should check consistency, calculation, logic, assumptions, .etc.
+* Break down the original question into its key components.
+* Analyze how the provided solution addresses the question step by step.
+* Based on the solution steps, design corresponding verification steps. Each verification step should examine aspects such as consistency, calculations, logic, and assumptions.
 """
 
     DEFAULT_USER_STAGE_SUBTASK_BEGIN="""Stage B: Solution Analysis & Judgment
 
-You will now begin multi-turn verification of the planned steps from Stage A.
+You will now begin multi-turn verification of the steps planned in Stage A.
 
-* You should conduct your verification according to the steps you designed in stage A. Each time you finished verifying one step, output exactly one <step/> at the end of one turn indicating you will proceed to the next step.
-* When you finished all verification steps or you find a obvious mistake in the original solution, output exactly one <end_of_analysis/> to finish stage B.
-* If complex calculations are involved, you may call python tool for calculation. To call python tool, you should outut a <python>...</python> tag instead of a <step/> at the end of one turn.
-The system will execute your code in a sandbox and return the contents of stdout. Then you can continue your step wise verification.
-  - The python code must be left-aligned, contain necessary imports, and avoid input(), OS commands, file I/O, network, or infinite loops.
-  - You must use print() so that the results of the python code can be correctly shown.
-  - You should not call python for trival question or any meaningless self-prove.
+* Conduct the verification according to your plan from Stage A. After completing each verification step, output exactly one <step/> tag at the end of that turn to indicate you are proceeding to the next step.
+* Once all verification steps are complete, or if you identify an obvious mistake in the original solution, output exactly one <end_of_analysis/> tag to conclude Stage B.
+* If complex calculations are involved, you may call the Python tool for computation. To do so, output a <python>...</python> block instead of a <step/> tag at the end of that turn.
+  - The Python code must be left-aligned, include necessary imports, and avoid input(), OS commands, file I/O, networking, or infinite loops.
+  - Use print() to display results so they can be correctly captured by the system.
+  - Do not invoke Python for trivial or self-evident checks.
 
 Now begin your verification:
     """
     
-    DEFAULT_USER_STAGE_SUBTASK_MIDDLE=""" Stage B: Solution Analysis & Judgment (continue)
-
-Now continue to verify the next planned step. 
+    DEFAULT_USER_STAGE_SUBTASK_MIDDLE=""" Stage B: Solution Analysis & Judgment (continued)
+Continue verifying the next planned step.
     """
     
     DEFAULT_USER_STAGE_REVIEW_MIDDLE="""Stage C: Final Review & Verdict
 
-Given all prior analyses, provide the final review and the boolean verdict.
+Given all prior analyses, provide your final review and boolean verdict.
 
 Requirements:
-- Go through all verification steps you have conducted, summarize why the step is correct or incorrect.
-- If all prior steps are confirmed to be correct, output <answer>true</answer>
-- If you have confirmed there are errors found in the steps, or you discover any new inconsistency at this moment, output <answer>false</answer>"""
+- Review all previous verification steps and summarize why each step was correct or incorrect.
+- If all previous steps were confirmed to be correct, output <answer>true</answer>.
+- If any step contained errors, or if you identify new inconsistencies at this stage, output <answer>false</answer>."""
     
     def __init__(
         self,
