@@ -76,6 +76,7 @@ class VerlWgBackend(ChatTemplateDefaultsMixin, CanGenerate, SupportChatTemplate)
             tokenize = tokenize,
             add_generation_prompt = add_generation_prompt,
             explicit_max_model_len=self.max_prompt_length,
+            generation_max_new_tokens=4096,
             **merged
         )
         return result
