@@ -51,7 +51,7 @@ class PythonSandboxActor:
             headers=self.headers + self.helper_code,
             context=self.context,
             helpers=self.helpers,
-            limit_resource=True,
+            limit_resource=False,
         )
         return asdict(res)
 
@@ -68,7 +68,7 @@ class PythonSandboxActor:
                 headers=self.headers + self.helper_code,
                 context=self.context,
                 helpers=self.helpers,
-                limit_resource=True,
+                limit_resource=False,
             )
             out.append(asdict(res))
         return out
