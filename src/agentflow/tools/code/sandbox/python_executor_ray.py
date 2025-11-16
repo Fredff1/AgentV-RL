@@ -53,13 +53,12 @@ class RayPythonExecutor:
     def _ensure_actor(self):
         if self._actor is not None:
             return
-        conf_dict = asdict(self.config)
         self._actor = PythonSandboxActor.options(
             num_cpus=1,
             max_restarts=4,
             max_task_retries=-1,
         ).remote(
-            config=conf_dict,
+            config=self.config,
             headers=self._headers + self._helper_code,
             context=self._context,
             helpers=self._helpers,

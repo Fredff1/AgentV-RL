@@ -16,7 +16,7 @@ def create_python_actor(
     max_task_retries: int = -1,
     num_cpus: int = 1,
     time_limit_s: float = 5,
-    mem_limit_mb: int = 16,
+    mem_limit_mb: int = 512,
 ):
     python_actor = PythonSandboxActor.options(
             max_restarts=max_restarts,
