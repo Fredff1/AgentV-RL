@@ -41,6 +41,21 @@ def read_jsonl_stream(path: str, *, max_records: Optional[int] = None):
             count += 1
             if max_records is not None and count >= max_records:
                 break
+            
+def read_exist_entries(path: str) -> List[int]:
+    exist_entries = []
+    try:
+        data = JsonUtil.read_jsonlines(path)
+        for block in data:
+            try:
+                idx = block.get("idx",None)
+                exist_entries.append(int(idx))
+            except:
+                pass
+        logger.info(f"Find existing data, the runner will skip these data.")
+    except:
+        logger.info(f"No exist data found at path {path}")
+    return exist_entries
 
 def to_text(x: Any) -> str:
     if isinstance(x, str):
@@ -279,6 +294,8 @@ def main():
     write_mode = "a" if args.append else "w"
     if not args.append:
         JsonUtil.write_jsonlines(args.output, [], mode="w")
+        
+    exist_entries = read_exist_entries(args.output)
 
     config = load_config(args.config)
     if args.model_path:
@@ -310,6 +327,9 @@ def main():
                 break
             idx, block = idx_block
             if idx < args.start_idx:
+                continue
+            if idx in exist_entries:
+                logger.info(f"Index {idx} already exists in output path, skipping")
                 continue
             block["idx"] = idx
             question: str = block.get("question", "")
@@ -352,6 +372,21 @@ def main():
             _, item = heapq.heappop(pending_heap)
             batch.append(item)
             next_to_write += 1
+            flushed += 1
+        if batch:
+            JsonUtil.write_jsonlines(args.output, batch, mode=write_mode)
+            if write_mode == "w":
+                write_mode = "a"       
+            return True
+        return False
+    
+    def write_all():
+        nonlocal next_to_write, write_mode
+        flushed = 0
+        batch = []
+        while pending_heap:
+            _, item = heapq.heappop(pending_heap)
+            batch.append(item)
             flushed += 1
         if batch:
             JsonUtil.write_jsonlines(args.output, batch, mode=write_mode)
@@ -438,6 +473,7 @@ def main():
     finally:
         while pending_heap:
             flush_ready()
+            write_all()
         # if write_buffer:
         #     write_buffer = sorted(write_buffer, key = lambda b: b.get("idx",1000))
         #     JsonUtil.write_jsonlines(args.output, write_buffer, mode=write_mode)
