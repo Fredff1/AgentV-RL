@@ -28,7 +28,7 @@ def create_python_actor(
 class PythonExecutionToolRay(BaseTool):
     """Execute Python code in a controlled sandbox with extensible context & helpers."""
     name = "python"
-    description = "Execute Python code safely with optional stdout capture, headers/context/helpers injection."
+    description = "Execute Python code safely in raylet with optional stdout capture, headers/context/helpers injection."
 
     def __init__(self,
                  actor,
@@ -89,7 +89,7 @@ class PythonExecutionToolRay(BaseTool):
         plan = ExecPlan(code=str(call.content), capture_mode=cap, answer_symbol=symbol, answer_expr=expr)
         res = self.executor.run(plan)
 
-        out = f"Stdout: {res.stdout}"
+        out = f"[raylet]Stdout: {res.stdout}"
         if len(out) > 2000:
             out = out[:2000] + "...(trunc)"
             
@@ -123,7 +123,7 @@ class PythonExecutionToolRay(BaseTool):
             results = self.executor.run_many(plans, show_progress=self.use_tqdm)
             packed: List[ToolCallResult] = []
             for res, c in zip(results, allowed_calls):
-                out = f"Stdout: {res.stdout}"
+                out = f"[raylet]Stdout: {res.stdout}"
                 if len(out) > 2000:
                     out = out[:2000] + "...(trunc)"
                 rep = "Execution Success" if res.ok else f"Execution Failed\n{res.error}"

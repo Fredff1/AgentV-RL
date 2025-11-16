@@ -393,8 +393,6 @@ At the end, provide your final judgment in a single line using:
         super().__init__()
         self.backend = backend
         registry = tool_registry or ToolRegistry()
-        py_tool = PythonExecutionTool(use_tqdm=False)
-        registry.register(py_tool)
         tool_caller = ToolCaller(registry, TagToolParser())
         self.max_rounds = max_rounds
         self.max_rounds_per_block = max_rounds_per_block

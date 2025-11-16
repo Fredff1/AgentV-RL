@@ -75,6 +75,7 @@ class PythonExecutionTool(BaseTool):
         self.executor.inject_helpers(helpers)
 
     def run_one(self, call: ToolCallRequest, **kwargs: Any) -> ToolCallResult:
+        raise ValueError("Native py tool is disabled")
         if self._is_quota_exceeded(call):
             return self._make_exceeded_result(call)
 
@@ -106,6 +107,7 @@ class PythonExecutionTool(BaseTool):
         )
 
     def run_batch(self, calls: List[ToolCallRequest], **kwargs: Any) -> List[ToolCallResult]:
+        raise ValueError("Native py tool is disabled")
         def _runner(allowed_calls: List[ToolCallRequest]) -> List[ToolCallResult]:
             if not allowed_calls:
                 return []
