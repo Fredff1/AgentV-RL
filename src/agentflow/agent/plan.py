@@ -224,14 +224,16 @@ Requirements:
         while (active_subtasks_idxs and subtask_rounds < self.max_rounds - 2):
             subtask_rounds += 1
             input_msgs = []
+            input_extras = []
             for indice in active_subtasks_idxs:
                 input_msgs.append(trans_messages_to_standard(full_msgs[indice]))
+                input_extras.append(full_extras[indice])
                 
             with self.agent.using_func(
                 finish_fn=self._stage_subtask,
                 error_fn=self._stage_subtask_has_error
             ):
-                resps, gen_metas = self.agent.generate(input_msgs,**kwargs)
+                resps, gen_metas = self.agent.generate(input_msgs, input_extras, **kwargs)
                 curr_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
             
             next_active_idxs = []
