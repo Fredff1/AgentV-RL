@@ -10,7 +10,7 @@ backend:                                # 推理后端与采样参数
   dtype: "auto"                         # 张量精度：auto/float32/bfloat16/float16 等
   sampling:                             # 统一的采样参数（被不同后端共用）
     temperature: 0.6                      # 温度，>1 更发散，=0 近似贪心
-    max_tokens: 2048                    # 最多生成的 token 数
+    max_tokens: 8192                    # 最多生成的 token 数
     top_p: 1.0                          # nucleus sampling 截断阈值（0~1）
     top_k: 20                           # 只在前 K 个候选中采样（<=0 表示不启用）
     repetition_penalty: 1.0
