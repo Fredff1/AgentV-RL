@@ -142,7 +142,7 @@ Each verification step may require one or more turns to complete.
 - Use only necessary imports and print() statements for outputs.
 - Do not use OS commands, file I/O, input(), or networking.
 - A <python> block always marks the end of the current turn.
-- You may use at most three <python> blocks across all of Stage B.
+- Python tool can only be invoke at most three times across stage B.
 
     """
     
@@ -174,7 +174,6 @@ Requirements:
         tool_caller = ToolCaller(registry, TagToolParser())
         self.max_rounds = max_rounds
         self.max_rounds_per_block = max_rounds_per_block
-        
         self.system_prompt = system_prompt or self.DEFAULT_SYSTEM
         
         self.agent = ToolDrivenAgent(
@@ -184,6 +183,15 @@ Requirements:
             error_fn = self._stage_task_analysis_has_error,
             max_rounds = max_rounds_per_block
         )
+        
+    def _update_round_counter(
+        self,
+        counter_cand: Dict[str, int],
+        counter_targ: Dict[str, int],
+    ):
+        for k, v in counter_targ.items():
+            counter_cand[k] = counter_cand.get(k, 0) + v
+        
         
     def generate(
         self,
@@ -200,6 +208,7 @@ Requirements:
         ] for q, a in zip(questions, answers)]
         
         full_msgs = [Message.from_dicts(msgs) for msgs in start_msgs]
+        full_extras = [{"round_counter": {}} for _ in len(questions)]
         
         resps, gen_metas = self.agent.generate(start_msgs, **kwargs)
         gen_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
@@ -228,6 +237,8 @@ Requirements:
             next_active_idxs = []
             for indice, curr_context in zip(active_subtasks_idxs, curr_contexts):
                 full_msgs[indice].extend(curr_context.all_round_messages())
+                self._update_round_counter(full_extras[indice]["round_counter"], curr_context.round_counters)
+                
                 
                 end_flag = self._review_stage_gate(curr_context)
                 if not end_flag and (subtask_rounds < self.max_rounds - 2):

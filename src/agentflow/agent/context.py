@@ -133,5 +133,10 @@ class AgentContext:
     @classmethod
     def from_messages(cls, messages: List[Message], meta: Optional[Dict[str, Any]] = None) -> AgentContext:
         ctx = cls(prompt_messages=list(messages), meta=meta or {})
-        ctx._ensure_round_exists(0)  # 准备第 0 轮
+        ctx._ensure_round_exists(0)
+        if isinstance(meta, dict):
+            round_counter_meta = meta.get("round_counter", {})
+            if isinstance(round_counter_meta, dict):
+                ctx.round_counters = dict(round_counter_meta)
+            
         return ctx
