@@ -208,7 +208,7 @@ Requirements:
         ] for q, a in zip(questions, answers)]
         
         full_msgs = [Message.from_dicts(msgs) for msgs in start_msgs]
-        full_extras = [{"round_counter": {}} for _ in len(questions)]
+        full_extras = [{"round_counter": {}} for _ in range(len(questions))]
         
         resps, gen_metas = self.agent.generate(start_msgs, **kwargs)
         gen_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
