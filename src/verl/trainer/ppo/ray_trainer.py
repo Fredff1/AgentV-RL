@@ -396,6 +396,7 @@ class RayPPOTrainer:
         
             
     def _init_wrapper(self):
+        num_gpus = self.config.trainer.n_gpus_per_node * self.config.trainer.nnodes
         self.use_multiturn_wrapper: bool = self.config.actor_rollout_ref.extra.use_multiturn_wrapper
         if self.use_multiturn_wrapper:
             self.wg_wrapper = vllmMultiturnWrapper(
@@ -404,7 +405,8 @@ class RayPPOTrainer:
                 tokenizer=self.tokenizer,
                 agent_config_path=self.config.actor_rollout_ref.extra.agent_config_path,
                 enable_thinking=self.config.actor_rollout_ref.extra.enable_thinking,
-                max_subtasks=self.config.actor_rollout_ref.extra.max_num_subtasks
+                max_subtasks=self.config.actor_rollout_ref.extra.max_num_subtasks,
+                num_gpus=num_gpus,
             )
         else:
             self.wg_wrapper = vLLMAgentWrapper(

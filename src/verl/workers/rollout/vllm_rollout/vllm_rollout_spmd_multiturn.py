@@ -111,6 +111,7 @@ class vllmMultiturnWrapper:
         tokenizer: PreTrainedTokenizer,
         agent_config_path: str = None,
         enable_thinking: bool = True,
+        num_gpus: int = 8,
         **kwargs
     ): 
         self.config=config
@@ -129,6 +130,7 @@ class vllmMultiturnWrapper:
             tokenizer=tokenizer,
             logger=self.logger,
             max_prompt_length=30000,
+            chunk_size=num_gpus,
         )
         self.backend.set_chat_template_defaults(enable_thinking=enable_thinking)
         tool_registry = ToolRegistry()
