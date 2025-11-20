@@ -1436,7 +1436,7 @@ class RayPPOTrainer:
 
         # load checkpoint before doing anything
         self._load_checkpoint()
-
+        self._init_wrapper()
         # perform validation before training
         # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
@@ -1455,7 +1455,7 @@ class RayPPOTrainer:
         last_val_metrics = None
         self.max_steps_duration = 0
         
-        self._init_wrapper()
+
         
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
