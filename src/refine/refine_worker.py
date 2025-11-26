@@ -47,7 +47,6 @@ def _parse_verdict_from_msgs(msgs: List[Union[Message, Any]]) -> Tuple[str, str]
         if role == "assistant" or role=="tool":
             valid.append(content)
     reason = "\n".join(valid) 
-    reason = content
     if len(reason) > 30000:
         reason = reason[-30000:]
     return label, reason
