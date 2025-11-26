@@ -40,13 +40,8 @@ def _parse_verdict_from_msgs(msgs: List[Union[Message, Any]]) -> Tuple[str, str]
     else:
         body = ans_tags[-1].body
         label = _answer_to_label(body)
-    valid = []
-    for msg in msgs:
-        content = msg.content if hasattr(msg, "content") else ""
-        role = msg.role if hasattr(msg, "role") else ""
-        if role == "assistant" or role=="tool":
-            valid.append(content)
-    reason = "\n".join(valid) 
+
+    reason = content
     if len(reason) > 30000:
         reason = reason[-30000:]
     return label, reason
@@ -194,6 +189,26 @@ class ForwardVerifierWorker:
         }},
         ]
         """
+        
+    REVIEW_PROMPT = """
+Now you are required to conduct Stage C (Final Review).
+
+You must carefully examine *all* previous verification steps (Stage A and Stage B). 
+Your goal is not only to judge correctness, but also to provide helpful, actionable feedback.
+
+Your response must follow these rules:
+
+1. In <review>...</review>, you must:
+   - Summarize the reasoning process across all earlier stages.
+   - Identify which steps were correct and explain why.
+   - Identify which steps were incorrect and explain why, referencing the specific flawed assumptions or logic.
+   - Provide actionable suggestions on how to correct or improve the mistaken steps.
+
+2. In <answer>...</answer>:
+   - Output <answer>true</answer> only if all previous steps were correct and consistent.
+   - Output <answer>false</answer> if any error, inconsistency, or unclear reasoning was found.
+
+"""
 
     def __init__(
         self,
@@ -213,6 +228,8 @@ class ForwardVerifierWorker:
             tool_registry=self.registry,
             system_prompt=system_prompt,
         )
+        
+        self.agent.DEFAULT_USER_STAGE_REVIEW_MIDDLE = self.REVIEW_PROMPT
 
     def evaluate(self, questions: List[str], answers: List[str], **kwargs) -> List[Dict[str, Any]]:
         assert len(questions) == len(answers), "Questions and answers should be in the same size"
