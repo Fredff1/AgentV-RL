@@ -193,19 +193,18 @@ class ForwardVerifierWorker:
     REVIEW_PROMPT = """
 Now you are required to conduct Stage C (Final Review).
 
-You must carefully examine *all* previous verification steps (Stage A and Stage B). 
-Your goal is not only to judge correctness, but also to provide helpful, actionable feedback.
+You must carefully examine *all* previous verification steps (Stage A and Stage B).
+Your goal in this stage is not only to judge correctness, but also to provide clear, actionable feedback that helps improve the answer.
 
-Your response must follow these rules:
+During Stage C, you must review all earlier reasoning, identify errors, explain them, provide corrections, and finally give a judgment.
 
 1. In <review>...</review>:
    - Summarize the reasoning process across all earlier stages.
-   - Identify which steps were incorrect and explain why, referencing the specific flawed assumptions or logic.
+   - If previous steps identified incorrect reasoning, or if you find new mistakes at this stage, clearly point out the flawed assumptions or logic.
+   - Provide actionable suggestions on how to correct or improve these mistakes.
+   - After listing all errors and correction plans, produce a fully rewritten and improved version of the candidate’s answer that incorporates all necessary corrections.
 
-2. In <suggestion>...</suggestion>:
-   - Provide actionable suggestions on how to correct or improve the mistaken steps.
-
-3. In <answer>...</answer>:
+2. In <answer>...</answer>:
    - Output <answer>true</answer> only if all previous steps were correct and consistent.
    - Output <answer>false</answer> if any error, inconsistency, or unclear reasoning was found.
 
@@ -371,14 +370,6 @@ At the end, provide your final judgment in a single line using:
 
 @ray.remote(num_gpus=1, max_restarts=8, max_task_retries=8)
 class CandidateActor:
-    """
-    单一职责：在本 GPU 上加载 candidate 模型，用 CandidateWorker 做
-    - initial_answer
-    - refine_answer
-
-    注意：一个 actor 对应一张卡上的一个 vLLM 模型。
-    """
-
     def __init__(
         self,
         config: Dict[str, Any],
@@ -406,10 +397,6 @@ class CandidateActor:
         payload: List[Dict[str, Any]],
         **gen_kwargs,
     ) -> List[Dict[str, Any]]:
-        """
-        payload: [ { "idx": int, "question": str, ... }, ... ]
-        返回: 每个元素增加 "answer" 字段
-        """
         if not payload:
             return []
 
