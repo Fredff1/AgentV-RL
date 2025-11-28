@@ -134,7 +134,7 @@ class vllmMultiturnWrapper:
         )
         self.backend.set_chat_template_defaults(enable_thinking=enable_thinking)
         tool_registry = ToolRegistry()
-        py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=512), mem_limit_mb=512)
+        py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=512), mem_limit_mb=512, max_rounds=6)
         tool_registry.register(py_tool)
         self.tool_registry = tool_registry
 

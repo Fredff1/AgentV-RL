@@ -97,7 +97,7 @@ class JudgeWorker:
         backend.set_chat_template_defaults(enable_thinking=enable_thinking)
         self.backend = backend
         reg = ToolRegistry()
-        py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=16))
+        py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=16), max_rounds=7)
         reg.register(py_tool)
         self.agent = MultiturnPlanSubtaskAgent(
             backend=backend,
