@@ -190,7 +190,7 @@ Requirements:
         counter_targ: Dict[str, int],
     ):
         for k, v in counter_targ.items():
-            counter_cand[k] = counter_cand.get(k, 0) + v
+            counter_cand[k] = v
         
         
     def generate(
