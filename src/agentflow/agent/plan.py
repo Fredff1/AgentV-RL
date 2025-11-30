@@ -288,6 +288,7 @@ Requirements:
         self,
         context: AgentContext
     ):
+        return True
         last_msg = context.last_message()
         cands = find_tags(last_msg.content, ["verification_steps"])
         if cands:
@@ -299,6 +300,7 @@ Requirements:
         self,
         context: AgentContext
     ):
+        return False
         last_msg = context.last_message()
         cands = find_tags(last_msg.content, ["verification_steps"])
         if cands:
@@ -368,11 +370,308 @@ Requirements:
         
 class BackwardVerifyAgent:
     
+    DEFAULT_SYSTEM="""You are a Verifier agent responsible for performing a multi-turn verification of a math problem’s solution.
+Your mission is to determine whether the given solution is correct.
+
+Unlike a forward, step-by-step verifier, your reasoning proceeds in reverse: 
+you begin from the final result or conclusion presented in the solution 
+and trace backward to determine whether it can be rigorously justified by the given question and established facts.
+
+You must complete the task strictly in three distinct stages, executed sequentially and independently.
+
+## Stage A: Task Analysis & Extraction
+Analyze the original question and its provided solution. Decompose the verification into smaller, checkable backward steps.
+
+## Stage B: Solution Analysis & Judgment
+Perform the actual verification one step at a time, following the plan you created in Stage A.
+
+## Stage C: Final Review & Verdict
+After all Stage B steps are complete, review the entire reasoning process and produce a final boolean verdict.
+
+In every turn, you must include your reasoning process inside a <think>...</think> block before presenting your results.
+
+"""
+    
+    DEFAULT_USER_INIT = """You are now entering **Stage A: Backward Task Analysis & Extraction**.
+
+## Original Question
+{question}
+
+## Original Solution (to be verified)
+{answer}
+
+In this stage, you are limited to analysis and planning only.
+You must NOT perform explicit verification, detailed calculations, or decide correctness during Stage A.
+
+Your objectives:
+* Identify the final conclusion or result asserted by the solution.
+* Work backward from this conclusion to determine which intermediate statements or transformations must hold.
+* Break down the original question into its essential components that support these backward dependencies.
+* Decompose the provided solution into its main steps in a way that makes backward checking possible.
+* Design a sequence of verification steps for Stage B.
+  - Each verification step must describe *what* backward relationship needs to be checked later, not perform the check itself.
+  - Focus on logical implications, hidden assumptions, reversibility of operations, and calculations that need to be validated in Stage B.
+
+After you list all the planned verification steps, stop your generation immediately to indicate that Stage A is complete.
+"""
+
+    DEFAULT_USER_STAGE_SUBTASK_BEGIN="""You are now entering **Stage B: Solution Analysis & Judgment**.
+
+In this stage, you will conduct a multi-turn verification of the steps designed in Stage A.
+Each verification step may require one or more turns to complete.
+
+**Turn Logic:**
+- A single verification step may take multiple turns.
+- Each turn must end with one of the following:
+  * <python>...</python> — when you need to perform a computation before continuing the same step in the next turn.
+  * <step/> — when the current step has been fully verified and you are ready to move to the next one.
+  * <end_of_analysis/> — when all steps are verified or a clear error has been found.
+
+**Instructions for each turn:**
+1. Restate the step you are verifying and reason carefully about it.
+2. Check whether this step is logically consistent with all previously verified backward steps.
+3. If a calculation or detailed check is needed, output a <python>...</python> block after reasoning and stop your response.  
+   The system will execute it and return the results for you to continue in the next turn.
+
+**Rules for <python> blocks:**
+- Use only necessary imports and print() statements for outputs.
+- Do not use OS commands, file I/O, input(), or networking.
+- A <python> block always marks the end of the current turn.
+- Python tool can only be invoke at most three times across stage B.
+
+    """
+    
+    DEFAULT_USER_STAGE_SUBTASK_MIDDLE=""" Continue verifying the next planned step.
+if all steps are finished, output <end_of_analysis/> to enter stage C.
+    """
+    
+    DEFAULT_USER_STAGE_REVIEW_MIDDLE="""
+Now you are required to conduct stage C.
+
+Given all prior analyses, provide your final review and boolean verdict.
+
+Requirements:
+- Review all previous verification steps and summarize why each step was correct or incorrect in <review>...</review>.
+- If all previous steps were confirmed to be correct, output <answer>true</answer>.
+- If any step contained errors, or if you identify new inconsistencies at this stage, output <answer>false</answer>."""
+    
+    def __init__(
+        self,
+        backend: CanGenerate,
+        max_rounds: int = 8,
+        max_rounds_per_block: int = 6,
+        tool_registry: Optional[ToolRegistry] = None,
+        system_prompt: Optional[str] = None,
+    ):
+        super().__init__()
+        self.backend = backend
+        registry = tool_registry or ToolRegistry()
+        tool_caller = ToolCaller(registry, TagToolParser())
+        self.max_rounds = max_rounds
+        self.max_rounds_per_block = max_rounds_per_block
+        self.system_prompt = system_prompt or self.DEFAULT_SYSTEM
+        
+        self.agent = ToolDrivenAgent(
+            backend=backend,
+            tool_caller = tool_caller,
+            finish_fn = self._stage_task_analysis,
+            error_fn = self._stage_task_analysis_has_error,
+            max_rounds = max_rounds_per_block
+        )
+        
+    def _update_round_counter(
+        self,
+        counter_cand: Dict[str, int],
+        counter_targ: Dict[str, int],
+    ):
+        for k, v in counter_targ.items():
+            counter_cand[k] = v
+        
+        
+    def generate(
+        self,
+        questions: List[str],
+        answers: List[str],
+        **kwargs,
+    ) -> Tuple[List[List[Message]], List[Dict]]:
+        
+        assert len(questions)==len(answers), "Questioins and answers should be in the same size"
+        # stage 1
+        start_msgs = [[
+            {"role":"system","content": self.system_prompt},
+            {"role":"user","content": self.DEFAULT_USER_INIT.format(question = q, answer = a)}
+        ] for q, a in zip(questions, answers)]
+        
+        full_msgs = [Message.from_dicts(msgs) for msgs in start_msgs]
+        full_extras = [{"round_counter": {}} for _ in range(len(questions))]
+        
+        resps, gen_metas = self.agent.generate(start_msgs, **kwargs)
+        gen_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
+        for idx, (resp, context) in enumerate(zip(resps, gen_contexts)):
+            full_msgs[idx].extend(context.all_round_messages())
+            
+        # stage 2
+        for fms, answer in zip(full_msgs, answers):
+            fms.append(Message(role="user",content=self.DEFAULT_USER_STAGE_SUBTASK_BEGIN))
+        
+        subtask_rounds = 0
+        active_subtasks_idxs = list(range(len(questions)))
+        while (active_subtasks_idxs and subtask_rounds < self.max_rounds - 2):
+            subtask_rounds += 1
+            input_msgs = []
+            input_extras = []
+            for indice in active_subtasks_idxs:
+                input_msgs.append(trans_messages_to_standard(full_msgs[indice]))
+                input_extras.append(full_extras[indice])
+                
+            with self.agent.using_func(
+                finish_fn=self._stage_subtask,
+                error_fn=self._stage_subtask_has_error
+            ):
+                resps, gen_metas = self.agent.generate(input_msgs, input_extras, **kwargs)
+                curr_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
+            
+            next_active_idxs = []
+            for indice, curr_context in zip(active_subtasks_idxs, curr_contexts):
+                full_msgs[indice].extend(curr_context.all_round_messages())
+                self._update_round_counter(full_extras[indice]["round_counter"], curr_context.round_counters)
+                
+                
+                end_flag = self._review_stage_gate(curr_context)
+                if not end_flag and (subtask_rounds < self.max_rounds - 2):
+                    full_msgs[indice].append(Message("user",self.DEFAULT_USER_STAGE_SUBTASK_MIDDLE))
+                    next_active_idxs.append(indice)
+                    
+            active_subtasks_idxs = next_active_idxs
+            
+        # stage 3
+        for fms, answer in zip(full_msgs, answers):
+            fms.append(Message(role="user",content=self.DEFAULT_USER_STAGE_REVIEW_MIDDLE))
+            
+        input_msgs = [trans_messages_to_standard(msgs) for msgs in full_msgs]
+            
+        with self.agent.using_func(
+            finish_fn=self._stage_review,
+            error_fn=self._stage_review_has_error
+        ):
+            resps, gen_metas = self.agent.generate(input_msgs,**kwargs)
+            curr_contexts: List[AgentContext] = [met["context"] for met in gen_metas]
+        
+        for idx, (resp, context) in enumerate(zip(resps, curr_contexts)):
+            full_msgs[idx].extend(context.all_round_messages())
+            
+        
+        return full_msgs, [{} for _ in range(len(questions))]
+    
+    def score(self, full_msgs: List[List[Message]], scorer: BoolLogitsScorer):
+        
+        std_msgs = [trans_messages_to_standard(msgs) for msgs in full_msgs]
+        
+        if isinstance(self.agent.backend, SupportChatTemplate):
+            texts: List[str] = self.agent.backend.apply_chat_template(std_msgs)
+        else:
+            texts: List[str] = [trans_messages_to_text(msg) for msg in full_msgs]
+            
+        scores, metas = scorer.score(texts)
+        
+        return scores, metas
+            
+        
+        
+        
+    def _stage_task_analysis(
+        self,
+        context: AgentContext
+    ):  
+        return True
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["verification_steps"])
+        if cands:
+            return True
+        else:
+            return False
+        
+    def _stage_task_analysis_has_error(
+        self,
+        context: AgentContext
+    ):
+        return False
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["verification_steps"])
+        if cands:
+            return False
+        else:
+            return True
+        
+    def _stage_subtask(
+        self,
+        context: AgentContext
+    ):
+        last_msg = context.last_message()
+        has_tag = ("<step/>" in last_msg.content)
+        cands = find_tags(last_msg.content, ["python"])
+        if cands :
+            return False
+        else:
+            if has_tag:
+                return True
+            return False
+
+        
+    def _stage_subtask_has_error(
+        self,
+        context: AgentContext
+    ):
+        last_msg = context.last_message()
+        if "<step/>" in last_msg.content:
+            return False
+        cands = find_tags(last_msg.content, ["step", "python"])
+        if cands:
+            return False
+        else:
+            return True
+        
+    def _review_stage_gate(
+        self,
+        context: AgentContext
+    ):
+        last_msg = context.last_message()
+        if "<end_of_analysis/>" in last_msg.content:
+            return True
+        else:
+            return False
+        
+    def _stage_review(
+        self,
+        context: AgentContext        
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["answer"])
+        if cands:
+            return True
+        else:
+            return False
+        
+    def _stage_review_has_error(
+        self,
+        context: AgentContext        
+    ):
+        last_msg = context.last_message()
+        cands = find_tags(last_msg.content, ["answer"])
+        if cands:
+            return False
+        else:
+            return True
+        
+class SingleTurnBackwardVerifyAgent:
+    
     DEFAULT_SYSTEM="""You are a backward verifier whose goal is to determine whether a given mathematical solution truly proves or computes what the question requires.
 
 Unlike a forward, step-by-step verifier, your reasoning proceeds in reverse: 
 you begin from the final result or conclusion presented in the solution 
 and trace backward to determine whether it can be rigorously justified by the given question and established facts.
+
+
 """
 
     DEFAULT_USER_INIT="""Read the following carefully and think critically:
