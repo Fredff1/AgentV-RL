@@ -290,6 +290,101 @@ class BackwardVerifierWorker:
             })
         return out
     
+class MultiheadVerifierWorker:
+    def __init__(
+        self,
+        backend: CanGenerate,
+        tool_registry: Optional[ToolRegistry] = None,
+        max_rounds: int = 8,
+        max_rounds_per_block: int = 6,
+        system_prompt: Optional[str] = None,
+    ):
+        self.forward_worker = ForwardVerifierWorker(
+            backend,
+            tool_registry,
+            max_rounds,
+            max_rounds_per_block,
+            system_prompt
+        )
+        
+        self.backward_worker = BackwardVerifierWorker(
+            backend,
+            tool_registry,
+            max_rounds,
+            max_rounds_per_block,
+            system_prompt
+        )
+        
+    @staticmethod
+    def _aggregate_label(lf: str, lb: str) -> str:
+        if lf == "incorrect" or lb == "incorrect":
+            return "incorrect"
+        if lf == "correct" and lb == "correct":
+            return "correct"
+        return "uncertain"
+
+    @staticmethod
+    def _aggregate_reason(
+        lf: str,
+        lb: str,
+        rf: str,
+        rb: str,
+    ) -> str:
+        """Combine forward & backward reasons into a single string."""
+        return (
+            "Forward verifier verdict: {lf}\n"
+            "Forward reasoning:\n{rf}\n\n"
+            "Backward verifier verdict: {lb}\n"
+            "Backward reasoning:\n{rb}"
+        ).format(lf=lf, lb=lb, rf=rf, rb=rb)
+
+    def evaluate(
+        self,
+        questions: List[str],
+        answers: List[str],
+        **kwargs,
+    ) -> List[Dict[str, Any]]:
+        """Evaluate a batch of q-a pairs and return standard results:
+
+        [
+            {
+                "label": "correct" | "incorrect" | "uncertain",
+                "reason": str,          # combined forward + backward reasons
+                "process": List[Message],  # we keep one trajectory (e.g. forward)
+            },
+            ...
+        ]
+        """
+        assert len(questions) == len(answers), "Questions and answers should be in the same size"
+
+        out_forward = self.forward_worker.evaluate(questions, answers, **kwargs)
+        out_backward = self.backward_worker.evaluate(questions, answers, **kwargs)
+
+        assert len(out_forward) == len(out_backward), "Forward/Backward outputs size mismatch"
+
+        out: List[Dict[str, Any]] = []
+        for f_res, b_res in zip(out_forward, out_backward):
+            lf = f_res["label"]
+            lb = b_res["label"]
+            rf = f_res["reason"]
+            rb = b_res["reason"]
+
+            label = self._aggregate_label(lf, lb)
+            reason = self._aggregate_reason(lf, lb, rf, rb)
+
+            process = f_res["process"]
+
+            out.append(
+                {
+                    "label": label,
+                    "reason": reason,
+                    "process": process,
+                }
+            )
+
+        return out
+    
+    
 class VanillaVerifierWorker:
     
     DEFAULT_SYSTEM="""
@@ -491,6 +586,13 @@ class VerifierActor:
         elif verifier_type == "vanilla":
             self.worker = VanillaVerifierWorker(
                 backend=backend,
+            )
+        elif verifier_type == "muilihead":
+            self.worker = MultiheadVerifierWorker(
+                backend=backend,
+                tool_registry=reg,
+                max_rounds=max_rounds,
+                max_rounds_per_block=max_rounds_per_block,
             )
         else:
             raise ValueError(f"Unknown verifier_type: {verifier_type}")
