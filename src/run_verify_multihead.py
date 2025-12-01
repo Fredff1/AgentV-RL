@@ -303,7 +303,7 @@ def main():
     else:
         enable_thinking = False
 
-    ray.init(include_dashboard=False)  
+    ray.init(address="auto", include_dashboard=False)  
     logger.info("Ray initialized.")
 
     num_workers = max(1, args.num_workers)
