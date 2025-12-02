@@ -62,9 +62,6 @@ Usage: $0 \\
   [--thinking-verifier|--no-thinking-verifier] \\
   [--ray-address addr]
 
-Thinking 开关（脚本层默认）:
-  - candidate: 默认不启用 thinking，可用 --thinking-candidate 打开
-  - verifier: 默认启用 thinking，可用 --no-thinking-verifier 关闭
 EOF
   exit 1
 }

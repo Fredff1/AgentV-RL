@@ -587,7 +587,7 @@ class VerifierActor:
             self.worker = VanillaVerifierWorker(
                 backend=backend,
             )
-        elif verifier_type == "muilihead":
+        elif verifier_type == "multihead":
             self.worker = MultiheadVerifierWorker(
                 backend=backend,
                 tool_registry=reg,
