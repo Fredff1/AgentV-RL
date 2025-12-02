@@ -44,8 +44,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--max-refine-rounds", type=int, default=3)
 
-    p.add_argument("--verifier-type", type=str, default="forward",
-                   choices=["forward", "backward", "vanilla"])
+    p.add_argument("--verifier-type", type=str, default="forward")
 
     p.add_argument("--enable-thinking-candidate", action="store_true")
     p.add_argument("--enable-thinking-verifier", action="store_true")
