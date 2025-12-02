@@ -248,6 +248,25 @@ During Stage C, you must review all earlier reasoning, identify errors, explain 
 
 
 class BackwardVerifierWorker:
+    REVIEW_PROMPT = """
+Now you are required to conduct Stage C (Final Review).
+
+You must carefully examine *all* previous verification steps (Stage A and Stage B).
+Your goal in this stage is not only to judge correctness, but also to provide clear, actionable feedback that helps improve the answer.
+
+During Stage C, you must review all earlier reasoning, identify errors, explain them, provide corrections, and finally give a judgment.
+
+1. In <review>...</review>:
+   - Summarize the reasoning process across all earlier stages.
+   - If previous steps identified incorrect reasoning, or if you find new mistakes at this stage, clearly point out the flawed assumptions or logic.
+   - Provide actionable suggestions on how to correct or improve these mistakes.
+   - After listing all errors and correction plans, produce a fully rewritten and improved version of the candidate’s answer that incorporates all necessary corrections.
+
+2. In <answer>...</answer>:
+   - Output <answer>true</answer> only if all previous steps were correct and consistent.
+   - Output <answer>false</answer> if any error, inconsistency, or unclear reasoning was found.
+
+"""
     def __init__(
         self,
         backend: CanGenerate,
@@ -266,6 +285,7 @@ class BackwardVerifierWorker:
             tool_registry=self.registry,
             system_prompt=system_prompt,
         )
+        self.agent.DEFAULT_USER_STAGE_REVIEW_MIDDLE=self.REVIEW_PROMPT
 
     def evaluate(self, questions: List[str], answers: List[str], **kwargs) -> List[Dict[str, Any]]:
         """Evaluate a batch of q-a pairs and returns standard results
