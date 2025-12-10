@@ -2,6 +2,7 @@
 import os
 import torch
 import ray
+import json
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 from agentflow.config import load_config
@@ -311,6 +312,39 @@ During Stage C, you must review all earlier reasoning, identify errors, explain 
         return out
     
 class MultiheadVerifierWorker:
+    
+    CONFLICT_PROMPT_TEMPLATE = """You are a final judge reviewing two verifiers who provide conflict verdicts towards a task.
+Your task:
+1. Read the original question and the model's candidate answer.
+2. Carefully compare the two verification reports (Forward and Backward).
+3. Decide a FINAL verdict about whether the candidate answer is correct.
+4. Provide a clear and detailed summary of your reasoning process.
+
+Write your reasoning and judgment in natural language first.
+
+At the very end of your response, on a separate line, you MUST output exactly one XML tag in one of the following forms:
+
+<answer>true</answer>
+<answer>false</answer>
+
+
+[Question]
+{question}
+
+[Candidate Answer]
+{answer}
+
+[Forward Verifier]
+Label: {lf}
+Reason:
+{rf}
+
+[Backward Verifier]
+Label: {lb}
+Reason:
+{rb}
+"""
+    
     def __init__(
         self,
         backend: CanGenerate,
@@ -319,6 +353,7 @@ class MultiheadVerifierWorker:
         max_rounds_per_block: int = 6,
         system_prompt: Optional[str] = None,
     ):
+        self.backend = backend
         self.forward_worker = ForwardVerifierWorker(
             backend,
             tool_registry,
@@ -334,6 +369,44 @@ class MultiheadVerifierWorker:
             max_rounds_per_block,
             system_prompt
         )
+    
+    def _final_judge_batch(
+        self,
+        conflict_items: List[Dict[str, Any]],
+        generate_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        returns：
+            [{"label": ..., "reason": ...}, ...]
+        """
+
+        if generate_kwargs is None:
+            generate_kwargs = {}
+
+        prompts = []
+        for item in conflict_items:
+            prompts.append(
+                self.CONFLICT_PROMPT_TEMPLATE.format(
+                    question=item["question"],
+                    answer=item["answer"],
+                    lf=item["lf"], lb=item["lb"],
+                    rf=item["rf"], rb=item["rb"],
+                )
+            )
+
+        gens, _ = self.backend.generate(prompts, extra=None, **generate_kwargs)
+
+        outs = []
+        for gen in gens:
+            msgs = Message.from_dicts([{"role": "assistant", "content": gen}])
+            label, reason = _parse_verdict_from_msgs(msgs)
+
+            outs.append({
+                "label": label,
+                "reason": reason,
+            })
+
+        return outs
         
     @staticmethod
     def _aggregate_label(lf: str, lb: str) -> str:
@@ -357,6 +430,10 @@ class MultiheadVerifierWorker:
             "Backward verifier verdict: {lb}\n"
             "Backward reasoning:\n{rb}"
         ).format(lf=lf, lb=lb, rf=rf, rb=rb)
+        
+    @staticmethod
+    def _is_conflict(lf: str, lb: str) -> bool:
+        return lf != lb
 
     def evaluate(
         self,
@@ -364,43 +441,53 @@ class MultiheadVerifierWorker:
         answers: List[str],
         **kwargs,
     ) -> List[Dict[str, Any]]:
-        """Evaluate a batch of q-a pairs and return standard results:
-
-        [
-            {
-                "label": "correct" | "incorrect" | "uncertain",
-                "reason": str,          # combined forward + backward reasons
-                "process": List[Message],  # we keep one trajectory (e.g. forward)
-            },
-            ...
-        ]
-        """
         assert len(questions) == len(answers), "Questions and answers should be in the same size"
 
         out_forward = self.forward_worker.evaluate(questions, answers, **kwargs)
         out_backward = self.backward_worker.evaluate(questions, answers, **kwargs)
-
         assert len(out_forward) == len(out_backward), "Forward/Backward outputs size mismatch"
 
-        out: List[Dict[str, Any]] = []
-        for f_res, b_res in zip(out_forward, out_backward):
+        n = len(questions)
+        out: List[Dict[str, Any]] = [None] * n
+
+        conflict_indices: List[int] = []
+        conflict_items: List[Dict[str, Any]] = []
+
+        for i, (q, a, f_res, b_res) in enumerate(zip(questions, answers, out_forward, out_backward)):
             lf = f_res["label"]
             lb = b_res["label"]
             rf = f_res["reason"]
             rb = b_res["reason"]
 
-            label = self._aggregate_label(lf, lb)
-            reason = self._aggregate_reason(lf, lb, rf, rb)
-
-            process = f_res["process"]
-
-            out.append(
-                {
-                    "label": label,
-                    "reason": reason,
-                    "process": process,
+            if not self._is_conflict(lf, lb):
+                out[i] = {
+                    "label": f_res["label"],
+                    "reason": f_res["reason"],
+                    "process": f_res.get("process", []),
                 }
-            )
+            else:
+                conflict_indices.append(i)
+                conflict_items.append(
+                    {
+                        "question": q,
+                        "answer": a,
+                        "lf": lf,
+                        "lb": lb,
+                        "rf": rf,
+                        "rb": rb,
+                        "f_process": f_res.get("process", []),
+                    }
+                )
+
+        if conflict_indices:
+            final_judge_results = self._final_judge_batch(conflict_items)
+
+            for idx, item, fj in zip(conflict_indices, conflict_items, final_judge_results):
+                out[idx] = {
+                    "label": fj["label"],
+                    "reason": fj["reason"],
+                    "process": item["f_process"],
+                }
 
         return out
     
