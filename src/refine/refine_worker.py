@@ -377,8 +377,8 @@ The answers should be in \\boxed{{}}.
             rf = f_res["reason"]
             rb = b_res["reason"]
             
-            lf_incorr = lf == "incorrect"
-            lb_incorr = lb == "incorrect"
+            lf_incorr = (lf == "incorrect" or lf == "uncertain")
+            lb_incorr = (lb == "incorrect" or lb == "uncertain")
             
             if lf_incorr or lb_incorr:
                 if lf_incorr:
