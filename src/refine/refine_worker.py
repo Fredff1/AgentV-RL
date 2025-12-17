@@ -317,6 +317,7 @@ class MultiheadVerifierWorker:
     
     SUPPORT_PROMPT="""Provide a answer of the question that a weaker assistant can follow:
 Question: {question}
+The answers should be in \\boxed{{}}.
     """
 
     
@@ -402,9 +403,9 @@ Question: {question}
             fixed_answers, _ = self.backend.generate(prompts, **kwargs)
             for idx, fixed_answer in zip(error_indices, fixed_answers):
                 out[idx]["reason"] = (
-                    out[idx].get("reason", "").strip()
+                    "The original answer is incorrect ".strip()
                     + "\n\n"
-                    + "Suggested fix / correct solution:\n"
+                    + "Suggested fix :\n"
                     + str(fixed_answer)
                 ).strip()
                 
