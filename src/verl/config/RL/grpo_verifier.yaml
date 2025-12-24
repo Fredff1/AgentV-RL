@@ -108,6 +108,7 @@ actor_rollout_ref:
     response_length: ${data.max_response_length}
     per_round_max_tokens: ${data.max_response_length}
     calculate_log_probs: False
+    forward_ratio: 1.0
     # for vllm rollout
     dtype: bfloat16 # should align with FSDP
     gpu_memory_utilization: 0.6

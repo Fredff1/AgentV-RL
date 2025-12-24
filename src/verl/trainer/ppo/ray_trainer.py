@@ -922,10 +922,13 @@ class RayPPOTrainer:
         except Exception as e:
             print(f"Warning: Could not set total_training_steps in config. Structure missing? Error: {e}")
 
-    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, **kwargs):
+    def _dump_generations(self, inputs, outputs, scores, reward_extra_infos_dict, dump_path, path_prefix: str = "", **kwargs):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
-        filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
+        if path_prefix:
+            filename = os.path.join(dump_path, f"{path_prefix}-{self.global_steps}.jsonl")
+        else:
+            filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
         agent_info = kwargs.get("agent_info", {})
 
         n = len(inputs)
@@ -978,7 +981,18 @@ class RayPPOTrainer:
         # Log to each configured logger
         self.validation_generations_logger.log(self.config.trainer.logger, samples, self.global_steps)
 
+    
     def _validate(self):
+        metric_dict = {}
+
+        for task_type in ["forward", "backward"]:
+            sub_metrics = self._validate_single(task_type)
+            for k, v in sub_metrics.items():
+                metric_dict[k] = v
+
+        return metric_dict
+    
+    def _validate_single(self, task_type: str):
         data_source_lst = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
 
@@ -1030,8 +1044,9 @@ class RayPPOTrainer:
                 "do_sample": self.config.actor_rollout_ref.rollout.val_kwargs.do_sample,
                 "validate": True,
                 "global_steps": self.global_steps,
+                "task_type": task_type,
             }
-            print(f"test_gen_batch meta info: {test_gen_batch.meta_info}")
+            print(f"test_gen_batch meta info for task {task_type}: {test_gen_batch.meta_info}")
 
             # pad to be divisible by dp_size
             size_divisor = (
@@ -1091,6 +1106,7 @@ class RayPPOTrainer:
                 scores=sample_scores,
                 reward_extra_infos_dict=reward_extra_infos_dict,
                 dump_path=val_data_dir,
+                path_prefix=task_type,
             )
 
         for key_info, lst in reward_extra_infos_dict.items():
@@ -1113,14 +1129,14 @@ class RayPPOTrainer:
                         metric_sec = "val-core"
                     else:
                         metric_sec = "val-aux"
-                    pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
+                    pfx = f"{metric_sec}/{task_type}/{data_source}/{var_name}/{metric_name}"
                     metric_dict[pfx] = metric_val
 
         if len(sample_turns) > 0:
             sample_turns = np.concatenate(sample_turns)
-            metric_dict["val-aux/num_turns/min"] = sample_turns.min()
-            metric_dict["val-aux/num_turns/max"] = sample_turns.max()
-            metric_dict["val-aux/num_turns/mean"] = sample_turns.mean()
+            metric_dict[f"val-aux/{task_type}/num_turns/min"] = sample_turns.min()
+            metric_dict[f"val-aux/{task_type}/num_turns/max"] = sample_turns.max()
+            metric_dict[f"val-aux/{task_type}/num_turns/mean"] = sample_turns.mean()
 
         return metric_dict
 

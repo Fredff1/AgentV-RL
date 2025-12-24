@@ -134,7 +134,7 @@ class vllmMultiturnWrapper:
         )
         self.backend.set_chat_template_defaults(enable_thinking=enable_thinking)
         tool_registry = ToolRegistry()
-        py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=512), mem_limit_mb=512)
+        py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=512), mem_limit_mb=512, max_rounds=3)
         tool_registry.register(py_tool)
         self.tool_registry = tool_registry
 
@@ -268,6 +268,10 @@ class vllmMultiturnWrapper:
         # left-padded attention_mask
         attention_mask: torch.Tensor = prompts.batch["attention_mask"]
         position_ids: torch.Tensor = prompts.batch["position_ids"]
+        meta_info = prompts.meta_info or {}
+        
+        is_val = meta_info.get("validate",False)
+        task_type = meta_info.get("task_type","forward")
 
         # used to construct attention_mask
         eos_token_id = self.tokenizer.eos_token_id
@@ -290,8 +294,20 @@ class vllmMultiturnWrapper:
         
         timing_generate = {}
         with simple_timer("agent generation", timing_generate):
-        
-            msgs, metas = self.forward_agent.generate(problems, solutions, **kwargs_middle)
+            forward_ratio = self.config.get("forward_ratio", 1.0)
+            assert forward_ratio >= 0 and forward_ratio <= 1
+            flag = random.random()
+            if (not is_val):
+                if flag < forward_ratio:
+                    msgs, metas = self.forward_agent.generate(problems, solutions, **kwargs_middle)
+                else:
+                    msgs, metas = self.backward_agent.generate(problems, solutions, **kwargs_middle)
+            else:
+                if task_type == "forward":
+                    msgs, metas = self.forward_agent.generate(problems, solutions, **kwargs_middle)
+                else:
+                    msgs, metas = self.backward_agent.generate(problems, solutions, **kwargs_middle)
+                    
             input_msgs_list = [[] for _ in range(batch_size)]
             response_ids_list = [[] for _ in range(batch_size)]
             response_mask_list = [[] for _ in range(batch_size)]

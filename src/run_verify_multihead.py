@@ -97,7 +97,7 @@ class JudgeWorker:
         backend.set_chat_template_defaults(enable_thinking=enable_thinking)
         self.backend = backend
         reg = ToolRegistry()
-        py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=16))
+        py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=16), max_rounds=7)
         reg.register(py_tool)
         self.agent = MultiturnPlanSubtaskAgent(
             backend=backend,
@@ -163,8 +163,6 @@ class JudgeWorker:
                     tool_counts += 1
 
             if not verdict:
-                forward_scores[idx] = 0
-                final_scores[idx] = 0
                 backward_samples.append(idx)
             else:
                 backward_samples.append(idx)
@@ -203,9 +201,6 @@ class JudgeWorker:
                 forward_score   = forward_scores[flat_idx]
                 forward_verdict = forward_verdicts[flat_idx]
                 
-                if not bverdict:
-                    backward_scores[local_ind] = 0
-                    bscore = 0
 
                 final_scores[flat_idx] = (forward_score * 0.7 + bscore * 0.3) 
 
@@ -308,7 +303,7 @@ def main():
     else:
         enable_thinking = False
 
-    ray.init(include_dashboard=False)  
+    ray.init(address="auto", include_dashboard=False)  
     logger.info("Ray initialized.")
 
     num_workers = max(1, args.num_workers)
