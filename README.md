@@ -77,7 +77,7 @@ If no candidate answer is provided, one will be generated in the first refinemen
 
 ### Training Data
 
-#### Train Data Format
+#### Train Data Format(RL)
 
 ```json
 {
@@ -171,12 +171,15 @@ Refine performs multi-round interaction, where candidates may be revised based o
 
 ### Supervised Fine-Tuning (SFT)
 
+SFT takes standard VERL multiturn train data.
+
 ```bash
 bash examples/train_sft_multiturn.sh
 ```
 
 ### Reinforcement Learning (GRPO)
 
+GRPO takes data of the specified format.
 
 ```bash
 bash examples/train_grpo.sh
@@ -184,9 +187,8 @@ bash examples/train_grpo.sh
 
 ## Multi-Node / Multi-GPU Execution
 
-Both BoN inference and GRPO training support multi-node, multi-GPU execution.
-All machines should mount the same shared file system.
-The same script is launched independently on each machine.
-One process automatically becomes the Ray head node; others join as workers.
-No manual cluster configuration is required.
+- Both BoN inference and GRPO training support multi-node, multi-GPU execution.
+- All machines should mount the same shared file system.
+- Launched the same srcipts independently on each machine with multinode parameters (nnode > 1).
+- One process automatically becomes the Ray head node; others join as workers.No manual cluster configuration is required.
 
