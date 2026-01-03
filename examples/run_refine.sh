@@ -1,24 +1,28 @@
-export CUDA_VISIBLE_DEVICES=4,6
+export CUDA_VISIBLE_DEVICES=2,3
 
+SRC_DIR="Agentic-Verfifier/src"
 
-bash run_refine_entry.sh \
-  --candidate-config config/cand.yaml \
-  --verifier-config  config/ver.yaml \
-  --input data/refine.jsonl \
-  --output out/final_forward.jsonl \
-  --round-output-dir out/rounds_forward \
-  --metrics-output-dir out/metrics_forward \
-  --exp-name exp_forward \
+export PYTHONPATH="${SRC_DIR}:${PYTHONPATH}"
+echo "PYTHONPATH = $PYTHONPATH"
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:False"
+
+EXP_NAME=
+WORKING_DIR=
+
+bash examples/run_refine_entry.sh \
+  --candidate-config config/refine_candidate.yaml \
+  --verifier-config  config/refine_verifier.yaml \
+  --input aime.jsonl \
+  --output ${WORKING_DIR}/${EXP_NAME}/last_round.jsonl \
+  --round-output-dir ${WORKING_DIR}/${EXP_NAME} \
+  --metrics-output-dir ${WORKING_DIR}/${EXP_NAME}/metrics \
+  --exp-name ${EXP_NAME} \
   --verifier-type forward \
-  --candidate-model-path \
-  --verifier-model-path \
-  --num-candidate-workers 1 \
-  --num-verifier-workers 1 \
-  --batch-size 64 \
+  --candidate-model-path Path-to-candidate\
+  --verifier-model-path Path-to-verifier \
+  --num-candidate-workers 2 \
+  --num-verifier-workers 2 \
+  --batch-size 16 \
   --max-refine-rounds 128 \
   --thinking-candidate \
-  ----thinking-verifier \
-
-
-
-
+  --thinking-verifier \
