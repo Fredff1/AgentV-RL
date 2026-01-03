@@ -189,7 +189,7 @@ else:
     print("[HEAD][WAIT] Timeout waiting for GPUs, proceed anyway (may crash in trainer).")
 ray.shutdown()
 PY
-
+    rm -rf ${CLUSTER_DIR}
     echo "[HEAD] Launch training"
     python src/run_verify_multihead.py \
     --config "${CONFIG}" \

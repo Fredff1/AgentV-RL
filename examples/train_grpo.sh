@@ -110,7 +110,7 @@ else:
     print("[HEAD][WAIT] Timeout waiting for GPUs, proceed anyway (may crash in trainer).")
 ray.shutdown()
 PY
-
+    rm -rf ${CLUSTER_DIR}
     echo "[HEAD] Launch training"
     python3 -m verl.trainer.main_ppo --config-path=$CONFIG_DIR --config-name=$CONFIG_NAME\
     algorithm.adv_estimator=grpo \

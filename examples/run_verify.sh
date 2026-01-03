@@ -7,7 +7,7 @@ bash examples/run_verify_entry.sh \
   --config config/distrubute_verify.yaml \
   --model-path models/qwen3-4b \
   --input datasets.jsonl \
-  --output-dir datasets/gaokao2023/1114 \
+  --output-dir datasets/gaokao2023 \
   --log-dir ./log \
   --start-idx 0 \
   --enable-thinking
