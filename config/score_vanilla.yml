@@ -1,21 +1,21 @@
 logging:                               
   level: "DEBUG"                      
-  log_to_file: false                    
-  log_file_dir: "/root/workspace/agent-rm/log"  
+  log_to_file: true                    
+  log_file_dir: "/apdcephfs_qy4/share_302593112/fredffu/workspace/Agentic-Verifier/logs"  
   log_file_name: "default.log"        
 
 backend:                                
-  model_path: ""                        
+  model_path: "/apdcephfs_qy4/share_302593112/fredffu/hf_models/Qwen3-4B"                        
   dtype: "auto"                         
   sampling:                             
     temperature: 0.8                      
-    max_tokens: 8192                    
+    max_tokens: 12800                    
     top_p: 1.0                          
     top_k: 20                           
     repetition_penalty: 1.0
   vllm:                                
     gpu_memory_utilization: 0.85         
-    tensor_parallel_size: 1
+    tensor_parallel_size: 4
     stop_tokens:
       - "</answer>"
       - "</python>"

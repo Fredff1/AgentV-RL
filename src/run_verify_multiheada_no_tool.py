@@ -1,0 +1,501 @@
+# run_verify_ray.py
+from __future__ import annotations
+import os
+import json
+import argparse
+import time
+import heapq
+from pathlib import Path
+from collections import Counter
+from typing import List, Dict, Any, Optional, Tuple
+
+import ray
+import torch
+
+from agentflow.config import load_config
+from agentflow.backend.vllm_logits import VllmChoiceLogitsBackend
+from agentflow.tools.registry import ToolRegistry
+from agentflow.tools.code.python_execution import PythonExecutionTool
+from agentflow.tools.code.python_execution_ray import PythonExecutionToolRay, create_python_actor
+from agentflow.agent.plan import MultiturnPlanSubtaskAgent, BackwardVerifyAgent
+from agentflow.inference.scorers.base import BoolLogitsScorer
+from agentflow.utils.json_util import JsonUtil
+from agentflow.utils.log_util import get_logger
+from agentflow.utils.tag_util import find_tags
+from agentflow.utils.vllm import free_vllm_mem, SupportVllm
+from agentflow.utils.cuda import wait_device
+
+NO_TOOL_USER_INIT="""You are now entering **Stage B: Solution Analysis & Judgment**.
+
+In this stage, you will conduct a multi-turn verification of the steps designed in Stage A.
+Each verification step may require one or more turns to complete.
+
+**Turn Logic:**
+- A single verification step may take multiple turns.
+- Each turn must end with one of the following:
+  * <step/> — when the current step has been fully verified and you are ready to move to the next one.
+  * <end_of_analysis/> — when all steps are verified or a clear error has been found.
+
+**Instructions for each turn:**
+1. Restate the step you are verifying and reason carefully about it.
+2. Check whether this step is logically consistent with all previously verified steps.
+
+
+"""
+
+
+logger = get_logger(name = __name__)
+
+def ensure_parent_dir(path: str):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+def read_jsonl_stream(path: str, *, max_records: Optional[int] = None):
+    with open(path, "r", encoding="utf-8") as f:
+        count = 0
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            yield count, json.loads(line)
+            count += 1
+            if max_records is not None and count >= max_records:
+                break
+            
+def read_exist_entries(path: str) -> List[int]:
+    exist_entries = []
+    try:
+        data = JsonUtil.read_jsonlines(path)
+        for block in data:
+            try:
+                idx = block.get("idx",None)
+                exist_entries.append(int(idx))
+            except:
+                pass
+        logger.info(f"Find existing data, the runner will skip these data.")
+    except:
+        logger.info(f"No exist data found at path {path}")
+    return exist_entries
+
+def to_text(x: Any) -> str:
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        for k in ("text", "output", "answer", "content", "message"):
+            if k in x:
+                v = x[k]
+                return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+        return json.dumps(x, ensure_ascii=False)
+    return str(x)
+
+def build_sequences_for_block(block: Dict[str, Any], *, join_template: str) -> List[str]:
+    prompt_text = block.get("question", "")
+    samples = block.get("samples", []) or []
+    return [join_template.format(problem=prompt_text, solution=to_text(s)) for s in samples]
+
+def _to_bool(text: str) -> Optional[bool]:
+    if text is None:
+        return None
+    s = str(text).strip().lower()
+    if s == "true":
+        return True
+    if s == "false":
+        return False
+    return None
+
+@ray.remote(num_gpus=1, max_restarts=8, max_task_retries=8)
+class JudgeWorker:
+    def __init__(self, config: Dict[str, Any], system_prompt: str, user_prompt: str, enable_thinking: bool = True):
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        os.environ.setdefault("OMP_NUM_THREADS", "1")
+        os.environ.setdefault("MKL_NUM_THREADS", "1")
+        if torch.cuda.is_available():
+            torch.cuda.set_device(0)
+
+        backend = VllmChoiceLogitsBackend(config)
+        backend.set_chat_template_defaults(enable_thinking=enable_thinking)
+        self.backend = backend
+        reg = ToolRegistry()
+        # py_tool = PythonExecutionToolRay(actor=create_python_actor(time_limit_s=10, mem_limit_mb=16), max_rounds=7)
+        # reg.register(py_tool)
+        MultiturnPlanSubtaskAgent.DEFAULT_USER_STAGE_SUBTASK_BEGIN=NO_TOOL_USER_INIT
+        BackwardVerifyAgent.DEFAULT_USER_STAGE_SUBTASK_BEGIN=NO_TOOL_USER_INIT
+        self.agent = MultiturnPlanSubtaskAgent(
+            backend=backend,
+            tool_registry=reg,
+        )
+        
+        self.backward_agent = BackwardVerifyAgent(
+            backend=backend,
+            tool_registry=reg,
+        )
+        
+        self.scorer = BoolLogitsScorer(backend)
+        
+    def score_batch(self, payload: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        flat_questions: List[str] = []
+        flat_answers: List[str] = []
+        index_map: List[Tuple[int, int]] = []  # (payload_idx, local_idx_in_payload)
+        payload_lengths: List[int] = []
+
+        for p_idx, item in enumerate(payload):
+            qs: List[str] = item["questions"]
+            ans: List[str] = item["answers"]
+            assert len(qs) == len(ans)
+            payload_lengths.append(len(qs))
+            for i, (q, a) in enumerate(zip(qs, ans)):
+                index_map.append((p_idx, i))
+                flat_questions.append(q)
+                flat_answers.append(a)
+
+        N = len(flat_questions)
+        if N == 0:
+            return [{"scores": [], "metas": [], "count": 0} for _ in payload]
+
+        msgs, gen_metas = self.agent.generate(flat_questions, flat_answers)
+
+        forward_verdicts: List[Optional[bool]] = []
+        for msg in msgs:
+            if not msg:
+                forward_verdicts.append(None)
+                continue
+            ans_tags = find_tags(msg[-1].content, ["answer"])
+            if not ans_tags:
+                forward_verdicts.append(False)
+                continue
+            forward_verdicts.append(_to_bool(ans_tags[-1].body))
+
+        if isinstance(self.backend, SupportVllm):
+            with free_vllm_mem(self.backend):
+                forward_scores, _ = self.agent.score(msgs, self.scorer)
+        else:
+            forward_scores, _ = self.agent.score(msgs, self.scorer)
+
+        final_scores: List[float] = list(forward_scores)
+        final_verdicts: List[Optional[bool]] = list(forward_verdicts)
+        extras: List[Dict[str, Any]] = []
+        backward_samples: List[int] = []
+        
+        for idx, (fmsg, fscore, verdict) in enumerate(zip(msgs, forward_scores, forward_verdicts)):
+            tool_counts = 0
+            for message in fmsg:
+                message.dict_data = None
+                if message.role == "tool":
+                    tool_counts += 1
+
+            if not verdict:
+                backward_samples.append(idx)
+            else:
+                backward_samples.append(idx)
+
+            extras.append({
+                "forward":  {"tool_counter": tool_counts, "process": fmsg, "score": fscore, "verdict": verdict},
+                "backward": {},
+                "verdict": verdict,
+                "score": fscore,
+            })
+
+        if backward_samples:
+            backward_questions = [flat_questions[i] for i in backward_samples]
+            backward_answers   = [flat_answers[i] for i in backward_samples]
+
+            b_msgs, bgen_metas = self.backward_agent.generate(backward_questions, backward_answers)
+
+            backward_verdicts: List[Optional[bool]] = []
+            for bmsg in b_msgs:
+                if not bmsg:
+                    backward_verdicts.append(None)
+                    continue
+                ans_tags = find_tags(bmsg[-1].content, ["answer"])
+                if not ans_tags:
+                    backward_verdicts.append(None)
+                    continue
+                backward_verdicts.append(_to_bool(ans_tags[-1].body))
+
+            if isinstance(self.backend, SupportVllm):
+                with free_vllm_mem(self.backend):
+                    backward_scores, _ = self.backward_agent.score(b_msgs, self.scorer)
+            else:
+                backward_scores, _ = self.backward_agent.score(b_msgs, self.scorer)
+
+            for local_ind, (flat_idx, bmsg, bscore, bverdict) in enumerate(zip(backward_samples, b_msgs, backward_scores, backward_verdicts)):
+                forward_score   = forward_scores[flat_idx]
+                forward_verdict = forward_verdicts[flat_idx]
+                
+
+                final_scores[flat_idx] = (forward_score * 0.7 + bscore * 0.3) 
+
+                if (forward_verdict is True and bverdict is True):
+                    final_verdicts[flat_idx] = True
+                else:
+                    final_verdicts[flat_idx] = False
+
+                tool_counts = 0
+                for message in bmsg:
+                    message.dict_data = None
+                    if message.role == "tool":
+                        tool_counts += 1
+
+                extras[flat_idx]["verdict"]  = final_verdicts[flat_idx]
+                extras[flat_idx]["score"] = final_scores[flat_idx]
+                extras[flat_idx]["backward"] = {
+                    "tool_counter": tool_counts,
+                    "process": bmsg,
+                    "score": bscore,
+                    "verdict": bverdict,
+                }
+
+        out: List[Dict[str, Any]] = []
+        cursor = 0
+        for p_idx, count in enumerate(payload_lengths):
+            if count == 0:
+                out.append({"scores": [], "metas": [], "count": 0})
+                continue
+
+            sl_scores   = final_scores[cursor: cursor + count]
+            sl_verdicts = final_verdicts[cursor: cursor + count]
+            sl_extras   = extras[cursor: cursor + count]
+
+            metas = []
+            for local_id, (score, verdict, e) in enumerate(zip(sl_scores, sl_verdicts, sl_extras)):
+                metas.append({"score": score, "verdict": verdict, "id": local_id, "extra": e})
+            metas = JsonUtil.json_sanitize(metas)
+
+            out.append({"scores": sl_scores, "metas": metas, "count": count})
+            cursor += count
+
+        return out
+
+
+
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser("LLM-as-Judge with Ray (batch-by-batch, low-memory)")
+    p.add_argument("--config", required=True, type=str)
+    p.add_argument("--input", required=True, type=str)
+    p.add_argument("--output", required=True, type=str)
+    p.add_argument("--model_path", default=None, type=str)
+    p.add_argument("--record-batch-size", type=int, default=16)
+    p.add_argument("--append", action="store_true")
+    p.add_argument("--enable-thinking", action="store_true")
+    p.add_argument("--join-template", type=str, default="")
+    p.add_argument("--judge-system-file", type=str, default=None)
+    p.add_argument("--judge-user-file", type=str, default=None)
+    p.add_argument("--max-records", type=int, default=None)
+    p.add_argument("--include_full_meta", action="store_true")
+    p.add_argument("--start_idx", type=int, default=0)
+    p.add_argument("--num-workers", type=int, default=2)
+    p.add_argument("--max-inflight-batches", type=int, default=2,
+                   help="At most this many batches submitted to workers at once.")
+    p.add_argument("--ray-address", type=str, default=None,
+                   help="Ray cluster address, e.g. 'auto'. Leave empty for local.")
+    return p.parse_args()
+
+def main():
+    wait_device()
+    import multiprocessing as mp
+    if mp.get_start_method(allow_none=True) != "spawn":
+        mp.set_start_method("spawn", force=True)
+    args = parse_args()
+    ensure_parent_dir(args.output)
+
+    system_prompt = ""
+    user_prompt = ""
+    if args.judge_system_file:
+        with open(args.judge_system_file, "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+    if args.judge_user_file:
+        with open(args.judge_user_file, "r", encoding="utf-8") as f:
+            user_prompt = f.read()
+
+    write_mode = "a" if args.append else "w"
+    if not args.append:
+        JsonUtil.write_jsonlines(args.output, [], mode="w")
+        
+    exist_entries = read_exist_entries(args.output)
+
+    config = load_config(args.config)
+    if args.model_path:
+        config["backend"]["model_path"] = args.model_path
+        
+    if args.enable_thinking:
+        enable_thinking = True
+    else:
+        enable_thinking = False
+
+    ray.init(address="auto", include_dashboard=False)  
+    logger.info("Ray initialized.")
+
+    num_workers = max(1, args.num_workers)
+    workers = [JudgeWorker.remote(config, system_prompt, user_prompt, enable_thinking) for _ in range(num_workers)]
+    logger.info(f"Spawned {num_workers} Ray workers.")
+
+    window = max(1, int(args.max_inflight_batches))
+    total_records = 0
+    reader = read_jsonl_stream(args.input, max_records=args.max_records)
+
+    def build_one_payload_group() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """返回 (payload, original_blocks)。payload: List[{'sequences': [...] }]*record_batch_size"""
+        cur_blocks: List[Dict[str, Any]] = []
+        cur_payload: List[Dict[str, Any]] = []
+        while len(cur_blocks) < args.record_batch_size:
+            idx_block = next(reader, None)
+            if idx_block is None:
+                break
+            idx, block = idx_block
+            if idx < args.start_idx:
+                continue
+            if idx in exist_entries:
+                logger.info(f"Index {idx} already exists in output path, skipping")
+                continue
+            block["idx"] = idx
+            question: str = block.get("question", "")
+            samples = block.get("samples", []) or []
+            questions = [question for _ in range(len(samples))]
+            cur_blocks.append(block)
+            cur_payload.append({"questions": questions, "answers": samples})
+        return cur_payload, cur_blocks
+    
+    def pick_worker(inflight: List[Tuple[int, "ray.ObjectRef", List[Dict[str, Any]]]],
+                    num_workers: int) -> int:
+        cnt = Counter(w for (w, _, _) in inflight)
+        return min(range(num_workers), key=lambda w: cnt.get(w, 0))
+
+    def submit_one() -> bool:
+        payload, blocks = build_one_payload_group()
+        if not payload:
+            return False
+        wid = pick_worker(inflight, num_workers)
+        obj = workers[wid].score_batch.remote(payload)
+        inflight.append((wid, obj, blocks))
+        idxs = []
+        for block in blocks:
+            if "idx" in block.keys():
+                idxs.append(block.get("idx"))
+        logger.info(f"Submitted batch to worker#{wid}, size={len(payload)}, idxs={idxs}")
+        return True
+
+    inflight: List[Tuple[int, "ray.ObjectRef", List[Dict[str, Any]]]] = []  # (wid, obj, blocks)
+    write_buffer: List[Dict[str, Any]] = []
+
+    pending_heap = []  # 存 (idx, blk_out)
+    next_to_write = args.start_idx
+    
+    def flush_ready(max_flush=10_000):
+        nonlocal next_to_write, write_mode
+        flushed = 0
+        batch = []
+        while pending_heap and pending_heap[0][0] == next_to_write and flushed < max_flush:
+            _, item = heapq.heappop(pending_heap)
+            batch.append(item)
+            next_to_write += 1
+            flushed += 1
+        if batch:
+            JsonUtil.write_jsonlines(args.output, batch, mode=write_mode)
+            if write_mode == "w":
+                write_mode = "a"       
+            return True
+        return False
+    
+    def write_all():
+        nonlocal next_to_write, write_mode
+        flushed = 0
+        batch = []
+        while pending_heap:
+            _, item = heapq.heappop(pending_heap)
+            batch.append(item)
+            flushed += 1
+        if batch:
+            JsonUtil.write_jsonlines(args.output, batch, mode=write_mode)
+            if write_mode == "w":
+                write_mode = "a"       
+            return True
+        return False
+    
+    try:
+
+        while len(inflight) < window:
+            payload, blocks = build_one_payload_group()
+            if not payload:
+                break
+            wid = len(inflight) % num_workers
+            obj = workers[wid].score_batch.remote(payload)
+            inflight.append((wid, obj, blocks))
+            idxs = []
+            for block in blocks:
+                if "idx" in block.keys():
+                    idxs.append(block.get("idx"))
+            logger.info(f"Submitted batch to worker#{wid}, size={len(payload)}, idxs={idxs}")
+
+        while inflight:
+            ready, rest = ray.wait([obj for (_, obj, _) in inflight], num_returns=1, timeout=8)
+            if not ready:
+                while len(inflight) < window and submit_one():
+                    pass
+                continue
+            obj_done = ready[0]
+            i = next(k for k, (curr_wid, o, _) in enumerate(inflight) if o == obj_done)
+            wid, _, blocks = inflight.pop(i)
+
+            items = ray.get(obj_done)  # List[{"scores":..., "metas":..., "count":...}]
+
+            for blk, item in zip(blocks, items):
+                L = int(item["count"])
+                scores = item["scores"]
+                metas = item["metas"]
+                blk_out = dict(blk)
+                if "idx" not in blk_out.keys():
+                    blk_out["idx"]=10000
+                idx = blk_out.get("idx",10000)
+                logger.info(f"Worker#{wid} finished task with idx {idx}")
+                evaluations: List[Dict[str, Any]] = blk_out.get("evaluations") or [dict() for _ in range(L)]
+                for eva, meta, score in zip(evaluations, metas, scores):
+                    eva["judge"] = meta.get("verdict")
+                    eva["score"] = score
+                    meta["eval"] = eva
+                blk_out["evaluations"] = evaluations
+
+                if args.include_full_meta:
+                    blk_out["metas"] = metas
+
+                if scores:
+                    bi = max(range(len(scores)), key=lambda i: scores[i])
+                    blk_out["best_index"] = bi
+                    blk_out["best_score"] = float(scores[bi])
+                    try:
+                        blk_out["best_sample"] = to_text(blk_out["samples"][bi])
+                    except Exception:
+                        pass
+                else:
+                    blk_out["best_index"] = None
+                    blk_out["best_score"] = None
+                heapq.heappush(pending_heap, (blk_out["idx"], JsonUtil.json_sanitize(blk_out)))
+                # write_buffer.append(JsonUtil.json_sanitize(blk_out))
+                total_records += 1
+
+            # if len(write_buffer) >= num_workers:
+            #     write_buffer = sorted(write_buffer, key = lambda b: b.get("idx",1000))
+            #     JsonUtil.write_jsonlines(args.output, write_buffer, mode=write_mode)
+            #     if write_mode == "w":
+            #         write_mode = "a"
+            #     write_buffer.clear()
+                
+            while len(pending_heap) >= 1:
+                if not flush_ready():
+                    break
+
+            while len(inflight) < window and submit_one():
+                pass
+
+    finally:
+        while pending_heap:
+            flush_ready()
+            write_all()
+        # if write_buffer:
+        #     write_buffer = sorted(write_buffer, key = lambda b: b.get("idx",1000))
+        #     JsonUtil.write_jsonlines(args.output, write_buffer, mode=write_mode)
+        logger.info(f"[DONE] Judged {total_records} records → {args.output}")
+        ray.shutdown()
+
+if __name__ == "__main__":
+    main()

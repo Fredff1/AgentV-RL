@@ -199,6 +199,7 @@ def score_streaming(
     config = load_config(config_path)
     logger = get_logger(config,__name__)
     log_config(logger,config)
+    logger.info("Starting backend...")
     backend = VllmChoiceLogitsBackend(config)
 
     # 2) 读取 judge 模板；若未提供则用 BoolLogitsGenerativeScorer 默认
@@ -237,6 +238,7 @@ def score_streaming(
         batch_sequences_per_block.append(seqs)
 
         if len(batch_blocks) >= record_batch_size:
+            logger.info(f"Judging batch {idx}...")
             write_mode = flush_batch_and_write(
                 scorer,
                 batch_blocks,
@@ -244,6 +246,7 @@ def score_streaming(
                 output_path,
                 first_write_mode=write_mode,
             )
+            logger.info(f"Judged batch {idx}")
             total += len(batch_blocks)
             batch_blocks.clear()
             batch_sequences_per_block.clear()
@@ -259,7 +262,7 @@ def score_streaming(
         )
         total += len(batch_blocks)
 
-    print(f"[DONE] Judged {total} records → {output_path}")
+    logger.info(f"[DONE] Judged {total} records → {output_path}")
 
 
 def parse_args() -> argparse.Namespace:
