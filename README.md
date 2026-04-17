@@ -28,15 +28,6 @@ AgentV-RL is an open-source recipe for scaling reward modeling with an agentic v
 This work is done by collaborators from Fudan University, Huazhong University of Science and Technology, The University of Hong Kong, and ByteDance Seed. Our training and evaluation codebase is built on Verl. This repository includes the core inference, refinement, SFT, and GRPO training code for the AgentV-RL pipeline.
 
 
-## Updates
-
-| Date | Update |
-| --- | --- |
-| 2025 | Initial paper draft: `AgentV-RL: Scaling Reward Modeling with Agentic Verifier`. |
-| 2026-04-17 | README reorganized into paper-release style. |
-| TBD | Add public paper link. |
-
-
 ## Main Results
 
 ### Best-of-N Verification
@@ -251,7 +242,6 @@ The GRPO stage expects boolean verifier supervision:
     "style": "rule"
   },
   "extra_info": {
-    "meta": {},
     "problem": "<original question>",
     "solution": "<candidate solution>"
   }
