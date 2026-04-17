@@ -233,3 +233,4 @@ eval/
 scripts/outputs/
 scripts/*.sh
 
+**/.DS_Store

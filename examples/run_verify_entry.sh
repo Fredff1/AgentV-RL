@@ -16,7 +16,7 @@ NUM_WORKERS=4
 TASK_NAME=""
 EXP_NAME=""
 
-CONFIG="config/distrubute_verify.yaml"
+CONFIG="config/default.yml"
 MODEL_PATH=""
 
 INPUT=""
@@ -41,7 +41,7 @@ Options:
   --task-name NAME            task name (default: ${TASK_NAME})
   --exp-name NAME             exp name (default: ${EXP_NAME})
   --num-workers N             number of workers (default: ${NUM_WORKERS})
-  --config PATH               distrubute_verify.yaml (default: ${CONFIG})
+  --config PATH               verifier config yaml (default: ${CONFIG})
   --model-path PATH           hf model path (default: ${MODEL_PATH})
   --input PATH                input jsonl (default: ${INPUT})
   --output-dir DIR            output directory (default: ${OUTPUT_DIR})

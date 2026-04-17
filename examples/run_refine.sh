@@ -10,8 +10,8 @@ EXP_NAME=
 WORKING_DIR=
 
 bash examples/run_refine_entry.sh \
-  --candidate-config config/refine_candidate.yaml \
-  --verifier-config  config/refine_verifier.yaml \
+  --candidate-config config/default.yml \
+  --verifier-config  config/default.yml \
   --input aime.jsonl \
   --output ${WORKING_DIR}/${EXP_NAME}/last_round.jsonl \
   --round-output-dir ${WORKING_DIR}/${EXP_NAME} \

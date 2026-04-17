@@ -1,28 +1,203 @@
-# Agentic Verifier
+<div align="center">
 
-This repository contains the code and data interfaces for reproducing experiments on agentic multi-turn verification, including Best-of-N (BoN) verification, iterative refinement, and verifier training.
+# AgentV-RL: Scaling Reward Modeling with Agentic Verifier
 
-## Setup
+**Jiazheng Zhang, Ziche Fu, Zhiheng Xi, Wenqing Jing, Mingxu Chai, Wei He, Guoqiang Zhang, Chenghao Fan, Chenxin An, Wenxiang Chen, Zhicheng Liu, Haojie Pan, Dingwei Zhu, Tao Gui, Qi Zhang, Xuanjing Huang**
+
+<p>
+Fudan University, Huazhong University of Science and Technology, The University of Hong Kong, ByteDance Seed
+</p>
+
+<p>
+<a href="#paper">Paper</a> |
+<a href="#updates">Updates</a> |
+<a href="#main-results">Results</a> |
+<a href="#getting-started">Getting Started</a> |
+<a href="#citation">Citation</a>
+</p>
+
+</div>
+
+## Overview
+
+This repository contains the code for the paper **AgentV-RL: Scaling Reward Modeling with Agentic Verifier**.
+
+The method is built around two complementary verification directions:
+
+- a **forward verifier** that checks whether the solution steps are sufficient to justify the conclusion;
+- a **backward verifier** that checks whether the claimed conclusion is actually grounded in the problem constraints.
+
+The verification process operates in a multi-turn setting and can call external tools such as Python for grounded computation.
+
+The repository supports two test-time scaling settings:
+
+- **Best-of-N verification**: rerank sampled candidate solutions with the verifier.
+- **Iterative refinement**: use the verifier as a critique model for multi-round correction.
+
+## Paper
+
+- **Title**: `AgentV-RL: Scaling Reward Modeling with Agentic Verifier`
+- **Paper URL**: `TBD`
+
+
+## Abstract
+
+Existing reward models and generative verifiers are often unreliable on difficult reasoning problems because they rely on single-turn judgments, suffer from error propagation, and have limited external grounding. AgentV-RL addresses this with a structured multi-turn verification process featuring explicit planning, stepwise validation, final verdict aggregation, and tool use, together with a training pipeline based on synthetic verification trajectories, multiturn supervised fine-tuning, and GRPO. The resulting method is used in both Best-of-N selection and iterative refinement settings.
+
+## Updates
+
+| Date | Update |
+| --- | --- |
+| 2025 | Initial paper draft: `AgentV-RL: Scaling Reward Modeling with Agentic Verifier`. |
+| 2026-04-17 | README reorganized into paper-release style. |
+| TBD | Add public paper link. |
+
+
+## Main Results
+
+### Best-of-N Verification
+
+Reported `BoN@128` results for **Agentic-Verifier-Qwen3-4B**:
+
+| Benchmark | Accuracy |
+| --- | ---: |
+| MATH500 | 79.0 |
+| GSM8K | 93.3 |
+| Gaokao2023 | 57.4 |
+| AIME24 | 53.3 |
+
+The paper reports up to **25.2** absolute points improvement over prior reward-model baselines on MATH500.
+
+### Iterative Refinement
+
+Reported multi-round refinement results for **Agentic-Verifier-Qwen3-4B**:
+
+| Benchmark | Turn 1 | Turn 2 | Turn 3 |
+| --- | ---: | ---: | ---: |
+| MATH500 | 84.2 | 89.2 | 89.8 |
+| GSM8K | 94.6 | 94.1 | 94.1 |
+| Gaokao2023 | 75.6 | 76.6 | 76.4 |
+| AIME24 | 40.0 | 33.3 | 33.0 |
+
+
+## Repository Structure
+
+```text
+Agentic-Verfifier/
+├── README.md
+├── requirements.txt
+├── config/
+│   ├── default.yml
+│   └── score_vanilla.yml
+├── examples/
+│   ├── run_verify.sh
+│   ├── run_verify_entry.sh
+│   ├── run_refine.sh
+│   ├── run_refine_entry.sh
+│   ├── score_vanilla_infer.sh
+│   ├── train_sft_multiturn.sh
+│   └── train_grpo.sh
+└── src/
+    ├── run_verify_multihead.py
+    ├── score_vanilla_infer.py
+    ├── refine/
+    ├── agentflow/
+    └── verl/
+```
+
+Important entrypoints:
+
+- `src/run_verify_multihead.py`: agentic Best-of-N verification
+- `src/refine/main_refine.py`: iterative refinement
+- `src/score_vanilla_infer.py`: vanilla single-pass verifier baseline
+- `examples/train_sft_multiturn.sh`: multiturn SFT
+- `examples/train_grpo.sh`: GRPO training
+
+## Installation
 
 ```bash
 pip install -r requirements.txt
+export PYTHONPATH="$(pwd)/src:${PYTHONPATH}"
 ```
 
-## Prepare Your Data
 
-All inference datasets are stored in JSONL format, and train datasets should be in parquet format.
 
-### Evaluation Data
+## Getting Started
 
-We support BoN evaluation and Refine evaluation.
+### Best-of-N Verification
 
-#### BoN Evaluation Format
+```bash
+bash examples/run_verify_entry.sh \
+  --task-name math500 \
+  --exp-name qwen3_4b_agentic \
+  --config config/default.yml \
+  --model-path /path/to/verifier-model \
+  --input /path/to/bon_input.jsonl \
+  --output-dir /path/to/output \
+  --log-dir /path/to/logs \
+  --num-workers 4 \
+  --enable-thinking
+```
+
+### Vanilla Verifier Baseline
+
+```bash
+python src/score_vanilla_infer.py \
+  --config config/score_vanilla.yml \
+  --input /path/to/bon_input.jsonl \
+  --output /path/to/bon_result.jsonl \
+  --record-batch-size 1 \
+  --append
+```
+
+### Iterative Refinement
+
+```bash
+bash examples/run_refine_entry.sh \
+  --candidate-config config/default.yml \
+  --verifier-config config/default.yml \
+  --input /path/to/refine_input.jsonl \
+  --output /path/to/final.jsonl \
+  --round-output-dir /path/to/round_outputs \
+  --metrics-output-dir /path/to/metrics \
+  --exp-name refine_qwen3 \
+  --verifier-type forward \
+  --candidate-model-path /path/to/candidate-model \
+  --verifier-model-path /path/to/verifier-model \
+  --num-candidate-workers 2 \
+  --num-verifier-workers 2 \
+  --batch-size 16 \
+  --max-refine-rounds 3 \
+  --thinking-candidate \
+  --thinking-verifier
+```
+
+### Training
+
+#### Multiturn SFT
+
+```bash
+bash examples/train_sft_multiturn.sh
+```
+
+#### GRPO
+
+```bash
+bash examples/train_grpo.sh
+```
+
+## Data Format
+
+### Best-of-N Verification Input
+
+Each JSONL record contains one problem and a fixed candidate pool.
+
 ```json
 {
   "idx": 0,
   "input": "<prompt text for the candidate model>",
   "question": "<raw question>",
-  "answer": "optional standard answer trace",
+  "answer": "optional reference solution",
   "ground_truth": "(3,\\frac{\\pi}{2})",
   "samples": [
     "candidate answer 0",
@@ -41,21 +216,21 @@ We support BoN evaluation and Refine evaluation.
 }
 ```
 
-#### Alignment rule
+Notes:
 
-* samples and evaluations are one-to-one aligned by index.
-* Each evaluation corresponds to exactly one candidate answer.
-* This alignment is required for correct BoN aggregation and metric computation.
+- `samples` and `evaluations` must be aligned by index.
+- each evaluation corresponds to exactly one candidate answer.
 
-#### Refine Evaluation Format
+### Refinement Input
+
+Each JSONL record contains one problem and, optionally, an initial answer.
 
 ```json
-
 {
   "idx": 0,
   "input": "<prompt text for the candidate model>",
   "question": "<raw question>",
-  "answer": "optional standard answer trace",
+  "answer": "optional reference solution",
   "ground_truth": "33",
   "refine_rounds": [
     {
@@ -73,11 +248,11 @@ We support BoN evaluation and Refine evaluation.
 }
 ```
 
-If no candidate answer is provided, one will be generated in the first refinement round.
+If no initial answer is provided, the candidate model generates it in round 0.
 
-### Training Data
+### RL Training Input
 
-#### Train Data Format(RL)
+The GRPO stage expects boolean verifier supervision:
 
 ```json
 {
@@ -99,96 +274,23 @@ If no candidate answer is provided, one will be generated in the first refinemen
 }
 ```
 
-#### Notes
+Notes:
 
-* data_source must be "rm_bool".
-* The training input is constructed from extra_info.problem + extra_info.solution.
-* prompt is kept only for verl framework checking and is not used for training.
+- `data_source` must be `rm_bool`.
+- the effective training input is built from `extra_info.problem` and `extra_info.solution`.
 
-## Run Inference
-### BoN Verification
+## Multi-Node Execution
+
+The provided BoN and GRPO scripts support multi-node execution with Ray.
+
+Requirements:
+
+- all machines mount the same shared filesystem;
+- each machine runs the same launch script with the same experiment metadata;
+- one process becomes the Ray head node and the others join as workers.
 
 
-```bash
-bash examples/run_verify.sh
-```
 
-or
-```bash
-bash examples/run_verify_entry.sh \
-  --task-name <task> \
-  --exp-name <exp> \
-  --model-path <model> \
-  --input <input.jsonl> \
-  --output-dir <output_dir> \
-  --num-workers <N> \
-  --enable-thinking
-```
+## License
 
-#### BoN-specific parameters
-
-* num-workers: number of parallel verifier workers
-* enable-thinking: enables model-specific reasoning mode
-* start-idx / append: allow partial or resumed evaluation
-
-BoN performs single-pass verification over a fixed candidate set and does not involve iterative interaction.
-
-### Refine Verification
-
-```bash
-bash examples/run_refine.sh
-```
-
-or
-
-```bash
-bash examples/run_refine_entry.sh \
-  --candidate-config config/refine_candidate.yaml \
-  --verifier-config  config/refine_verifier.yaml \
-  --input <input.jsonl> \
-  --output <final.jsonl> \
-  --round-output-dir <round_dir> \
-  --metrics-output-dir <metrics_dir> \
-  --exp-name <exp> \
-  --verifier-type forward \
-  --candidate-model-path <candidate_model> \
-  --verifier-model-path <verifier_model> \
-  --num-candidate-workers <Nc> \
-  --num-verifier-workers <Nv> \
-  --max-refine-rounds <K>
-```
-
-#### Refine-specific parameters
-
-* num-candidate-workers: parallel candidate generation workers
-* num-verifier-workers: parallel verifier workers
-* max-refine-rounds: maximum verification–correction iterations
-* verifier-type: multihead, forward, backward, or vanilla
-
-Refine performs multi-round interaction, where candidates may be revised based on verifier feedback.
-
-## Run Training
-
-### Supervised Fine-Tuning (SFT)
-
-SFT takes standard VERL multiturn train data.
-
-```bash
-bash examples/train_sft_multiturn.sh
-```
-
-### Reinforcement Learning (GRPO)
-
-GRPO takes data of the specified format.
-
-```bash
-bash examples/train_grpo.sh
-```
-
-## Multi-Node / Multi-GPU Execution
-
-- Both BoN inference and GRPO training support multi-node, multi-GPU execution.
-- All machines should mount the same shared file system.
-- Launched the same srcipts independently on each machine with multinode parameters (nnode > 1).
-- One process automatically becomes the Ray head node; others join as workers.No manual cluster configuration is required.
-
+This project is released under the license in `LICENSE`.
